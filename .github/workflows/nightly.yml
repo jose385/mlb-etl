@@ -1,9 +1,10 @@
 name: MLB Nightly ETL
+
 on:
   schedule:
-    # 00 : 05 ET daily  (cron is always UTC)  ★ GitHub-cron syntax reference:contentReference[oaicite:1]{index=1}
+    # 00:05 ET (cron is UTC → 04:05)
     - cron:  '5 4 * * *'
-  workflow_dispatch:    # let you run it manually
+  workflow_dispatch:
 
 jobs:
   etl:
@@ -12,29 +13,29 @@ jobs:
       AWS_ACCESS_KEY_ID:     ${{ secrets.AWS_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
       PG_DSN:                ${{ secrets.PG_DSN }}
-      OUTPUT_DIR:            stage        # local landing zone
+      OUTPUT_DIR:            stage
 
     steps:
-    - uses: actions/checkout@v4                       # pulls repo
+    - uses: actions/checkout@v4
 
-    # ------------ Python (StatsAPI) ------------
+    # ---------- Python (StatsAPI) ----------
     - name: Set up Python
       uses: actions/setup-python@v5
-      with: { python-version: '3.12' }
+      with:
+        python-version: '3.12'
 
     - name: Install Python deps
       run: pip install -r py/requirements.txt
 
     - name: Run StatsAPI ETL
-      run: python py/statsapi_etl.py                  # schedule + boxscore:contentReference[oaicite:2]{index=2}
-      
-    # ---------- R step (no baseballR) ----------
+      run: python py/statsapi_etl.py
+
+    # ---------- R step (raw CSV, no baseballR) ----------
     - name: Install R & pull Statcast
       run: |
-            Rscript -e "install.packages(c('arrow','readr','lubridate'),
-               repos='https://cloud.r-project.org')"
-            Rscript r/statcast_csv_pull.R
+        Rscript -e "install.packages(c('arrow','readr','lubridate'), repos='https://cloud.r-project.org')"
+        Rscript r/statcast_csv_pull.R
 
-    # ------------ Load into Postgres ------------
+    # ---------- Load into Postgres ----------
     - name: Load Parquet into Postgres
       run: python loader/load_parquet_into_pg.py

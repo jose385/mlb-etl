@@ -29,9 +29,6 @@ jobs:
       run: python py/statsapi_etl.py                  # schedule + boxscore:contentReference[oaicite:2]{index=2}
 
     # ------------ R (baseballR) ------------
-    - name: Set up R
-      uses: r-lib/actions/setup-r@v2
-      with: { use-public-rspm: true }                 # installs R & CRAN mirror
 
     # .github/workflows/nightly.yml  – R step
     # --- R step ---

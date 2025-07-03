@@ -1,0 +1,43 @@
+name: MLB Nightly ETL
+on:
+  schedule:
+    # 00 : 05 ET daily  (cron is always UTC)  ★ GitHub-cron syntax reference:contentReference[oaicite:1]{index=1}
+    - cron:  '5 4 * * *'
+  workflow_dispatch:    # let you run it manually
+
+jobs:
+  etl:
+    runs-on: ubuntu-latest
+    env:
+      AWS_ACCESS_KEY_ID:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      PG_DSN:                ${{ secrets.PG_DSN }}
+      OUTPUT_DIR:            stage        # local landing zone
+
+    steps:
+    - uses: actions/checkout@v4                       # pulls repo
+
+    # ------------ Python (StatsAPI) ------------
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with: { python-version: '3.12' }
+
+    - name: Install Python deps
+      run: pip install -r py/requirements.txt
+
+    - name: Run StatsAPI ETL
+      run: python py/statsapi_etl.py                  # schedule + boxscore:contentReference[oaicite:2]{index=2}
+
+    # ------------ R (baseballR) ------------
+    - name: Set up R
+      uses: r-lib/actions/setup-r@v2
+      with: { use-public-rspm: true }                 # installs R & CRAN mirror
+
+    - name: Install R packages & run
+      run: |
+        Rscript -e "install.packages(c('arrow','baseballr'))"  # baseballr statcast_search:contentReference[oaicite:3]{index=3}
+        Rscript r/baseballr_etl.R
+
+    # ------------ Load into Postgres ------------
+    - name: Load Parquet into Postgres
+      run: python loader/load_parquet_into_pg.py

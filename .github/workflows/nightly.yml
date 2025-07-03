@@ -34,11 +34,12 @@ jobs:
       with: { use-public-rspm: true }                 # installs R & CRAN mirror
 
     # .github/workflows/nightly.yml  – R step
-    - name: Install R packages & run
+    # --- R step ---
+    - name: Install R & pull Statcast
       run: |
-        Rscript -e "install.packages('remotes', repos='https://cloud.r-project.org')"
-        Rscript -e "remotes::install_github('BillPetti/baseballr')"   # ← dev branch with new column list
-        Rscript r/baseballr_etl.R
+           Rscript -e "install.packages(c('arrow','readr','lubridate'), repos='https://cloud.r-project.org')"
+           Rscript r/baseballr_etl.R
+
 
 
     # ------------ Load into Postgres ------------

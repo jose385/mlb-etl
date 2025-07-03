@@ -1,0 +1,6 @@
+MLB-StatsAPI>=1.9.0           # schedule(), boxscore_data() etc.:contentReference[oaicite:4]{index=4}
+duckdb
+pandas
+pyarrow
+psycopg2-binary              # COPY FROM STDIN helper:contentReference[oaicite:5]{index=5}
+boto3                         # optional if you later push to S3

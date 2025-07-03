@@ -34,13 +34,12 @@ jobs:
       with: { use-public-rspm: true }                 # installs R & CRAN mirror
 
     # .github/workflows/nightly.yml  – R step
-    # --- R step ---
+    # ---------- R step (no baseballR) ----------
     - name: Install R & pull Statcast
       run: |
-           Rscript -e "install.packages(c('arrow','readr','lubridate'), repos='https://cloud.r-project.org')"
-           Rscript r/baseballr_etl.R
-
-
+            Rscript -e "install.packages(c('arrow','readr','lubridate'),
+               repos='https://cloud.r-project.org')"
+            Rscript r/statcast_csv_pull.R
 
     # ------------ Load into Postgres ------------
     - name: Load Parquet into Postgres

@@ -18,3 +18,4 @@ for gid in game_ids:
 
 pd.json_normalize(rows).to_parquet(f"{OUT}/statsapi_{yday}.parquet", index=False)
 print(f"✅ wrote {len(rows)} plays for {yday}")
+

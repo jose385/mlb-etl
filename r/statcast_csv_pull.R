@@ -1,5 +1,7 @@
 #!/usr/bin/env Rscript
 
+options(timeout = 60000)
+
 # Pull yesterday’s Statcast CSV and write Parquet
 
 library(readr)
@@ -7,6 +9,9 @@ library(readr)
 library(arrow)
 
 library(lubridate)
+
+Library(curl)
+
 
 
 out_dir <- Sys.getenv("OUTPUT_DIR", "stage")

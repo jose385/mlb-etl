@@ -1,0 +1,81 @@
+name: MLB Nightly ETL
+
+
+on:
+
+  schedule:
+
+    - cron: '5 4 * * *'      # 00:05 ET
+
+  workflow_dispatch:
+
+
+jobs:
+
+  etl:
+
+    runs-on: ubuntu-latest
+
+    env:
+
+      AWS_ACCESS_KEY_ID:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+      PG_DSN:                ${{ secrets.PG_DSN }}
+
+      OUTPUT_DIR:            stage
+
+
+    steps:
+
+      - uses: actions/checkout@v4
+
+
+      # ---------- Python (StatsAPI) ----------
+
+      - name: Set up Python
+
+        uses: actions/setup-python@v5
+
+        with:
+
+          python-version: '3.12'
+
+
+      - name: Install Python deps
+
+        run: pip install -r py/requirements.txt
+
+
+      - name: Run StatsAPI ETL
+
+        run: python py/statsapi_etl.py
+
+
+      # ---------- R tool-chain ----------
+
+      - name: Set up R
+
+        uses: r-lib/actions/setup-r@v2
+
+        with:
+
+          r-version: '4.3.3'
+
+
+      - name: Install R packages & pull Statcast
+
+        run: |
+
+          Rscript -e "install.packages(c('arrow','readr','lubridate'), repos='https://cloud.r-project.org')"
+
+          Rscript r/statcast_csv_pull.R
+
+
+      # ---------- Load into Postgres ----------
+
+      - name: Load Parquet into Postgres
+
+        run: python loader/load_parquet_into_pg.py
+        

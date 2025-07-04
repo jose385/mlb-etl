@@ -10,7 +10,7 @@ library(arrow)
 
 library(lubridate)
 
-Library(curl)
+library(curl)
 
 
 

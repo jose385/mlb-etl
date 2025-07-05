@@ -1,55 +1,45 @@
-name: MLB Nightly ETL
-
-
-on:
-
-  schedule:
-
-    - cron: '5 4 * * *'        # 00:05 ET
-
-  workflow_dispatch:
-
-
 jobs:
 
   etl:
 
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-latest            # ← already in your file
 
-     # ↓↓↓––– 1)  add this services section –––↓↓↓
+
+    # 1️⃣  NEW – service container that GitHub spins up
 
     services:
 
       postgres:
 
-        image: postgres:16-alpine          # or any tag you like
+        image: postgres:16-alpine     # all-lower-case, tag after the colon
 
-        env:
+        env:                          # credentials live here – NOT in options
+
 
           POSTGRES_USER:     ghactions
 
           POSTGRES_PASSWORD: secret
 
           POSTGRES_DB:       mlb
-          
+
         ports:
+          - 5432:5432                # exposes the DB on localhost:5432
 
-          - 5432:5432
+        options: >-                  # health-check; one long string
 
-        options: >-
+          --health-cmd pg_isready
 
-          --health-cmd="pg_isready -U ghactions"
+          --health-interval 10s
 
-          --health-interval=10s
+          --health-timeout 5s
 
-          --health-timeout=5s
+          --health-retries 5         # keep every flag lower-case
 
-          --health-retries=5
-
-    # ↑↑↑––– 1)  services block ends here –––↑↑↑
-
+    # 2️⃣  Job-wide variables (now point at the service you just started)
 
     env:
+
+      PG_DSN: postgres://ghactions:secret@localhost:5432/mlb
 
       OUTPUT_DIR: stage
 
@@ -57,55 +47,49 @@ jobs:
 
       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
 
-      PG_DSN: postgres://ghactions:secret@localhost:5432/mlb
-      
 
+    # 3️⃣  The build steps you already have
 
     steps:
 
-    - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+
+      - name: Cache pip
+
+        uses: actions/cache@v4
+
+        with:
+
+          path: ~/.cache/pip
+
+          key: ${{ runner.os }}-pip-${{ hashFiles('py/requirements.txt') }}
 
 
-    # ---------- cache pip so we don’t reinstall every run ----------
+      - name: Set up Python
 
-    - name: Cache pip
+        uses: actions/setup-python@v5
 
-      uses: actions/cache@v4                         # pip cache how-to :contentReference[oaicite:4]{index=4}
+        with:
 
-      with:
-
-        path: ~/.cache/pip
-
-        key: ${{ runner.os }}-pip-${{ hashFiles('py/requirements.txt') }}
+          python-version: "3.12"
 
 
-    # ---------- Python tool-chain ----------
+      - name: Install deps
 
-    - name: Set up Python
-
-      uses: actions/setup-python@v5                 # installs & adds to PATH :contentReference[oaicite:5]{index=5}
-
-      with:
-
-        python-version: '3.12'
+        run: pip install -r py/requirements.txt
 
 
-    - name: Install deps
+      - name: Pull Statcast (pybaseball)
 
-      run: pip install -r py/requirements.txt
-
-
-    - name: Pull Statcast CSV
-
-      run: python py/statcast_csv_pull.py
+        run: python py/statcast_csv_pull.py
 
 
-    - name: Pull StatsAPI data
+      - name: Pull StatsAPI data
 
-      run: python py/statsapi_etl.py
+        run: python py/statsapi_etl.py
 
 
-    - name: Load into Postgres
+      - name: Load into Postgres
 
-      run: python loader/load_parquet_into_pg.py
-      
+        run: python loader/load_parquet_into_pg.py
+        

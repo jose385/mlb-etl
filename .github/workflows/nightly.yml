@@ -2,19 +2,18 @@ jobs:
 
   etl:
 
-    runs-on: ubuntu-latest            # ← already in your file
+    runs-on: ubuntu-latest
 
 
-    # 1️⃣  NEW – service container that GitHub spins up
+    # ↓↓↓––– 1)  add this services section –––↓↓↓
 
     services:
 
       postgres:
 
-        image: postgres:16-alpine     # all-lower-case, tag after the colon
+        image: postgres:16-alpine          # or any tag you like
 
-        env:                          # credentials live here – NOT in options
-
+        env:
 
           POSTGRES_USER:     ghactions
 
@@ -23,19 +22,23 @@ jobs:
           POSTGRES_DB:       mlb
 
         ports:
-          - 5432:5432                # exposes the DB on localhost:5432
 
-        options: >-                  # health-check; one long string
+          - 5432:5432
 
-          --health-cmd pg_isready
+        options: >-
 
-          --health-interval 10s
+          --health-cmd="pg_isready -U ghactions"
 
-          --health-timeout 5s
+          --health-interval=10s
 
-          --health-retries 5         # keep every flag lower-case
+          --health-timeout=5s
 
-    # 2️⃣  Job-wide variables (now point at the service you just started)
+          --health-retries=5
+
+    # ↑↑↑––– 1)  services block ends here –––↑↑↑
+
+
+    # ↓↓↓––– 2)  set env so every step knows the DSN –––↓↓↓
 
     env:
 
@@ -47,8 +50,10 @@ jobs:
 
       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
 
+    # ↑↑↑––– 2)  env block ends here –––↑↑↑
 
-    # 3️⃣  The build steps you already have
+
+    # ↓↓↓  your build steps stay exactly the same ↓↓↓
 
     steps:
 
@@ -71,7 +76,7 @@ jobs:
 
         with:
 
-          python-version: "3.12"
+          python-version: '3.12'
 
 
       - name: Install deps

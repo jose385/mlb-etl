@@ -4,6 +4,9 @@ pyarrow
 
 duckdb
 
+requests
+
+
 MLB-StatsAPI>=1.9.0   # wrapper you import as “statsapi”
 
 

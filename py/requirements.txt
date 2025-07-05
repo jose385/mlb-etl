@@ -1,9 +1,20 @@
 pandas
+
 pyarrow
+
 duckdb
-statsapi
+
+MLB-StatsAPI>=1.9.0   # wrapper you import as “statsapi”
+
+
 pybaseball           # optional: extra queries & FanGraphs helpers :contentReference[oaicite:6]{index=6}
+
 numpy
+
 scipy
+
 statsmodels          # Wilson CIs & logistic models :contentReference[oaicite:7]{index=7}
+
 scikit-learn         # gradient-boost sims
+
+

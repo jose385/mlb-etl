@@ -1,3 +1,16 @@
+# .github/workflows/nightly.yml  ← full file, keep exactly this shape
+
+name: MLB Nightly ETL
+
+
+on:
+
+  schedule:
+    - cron:  '5 4 * * *'          # 00 :05 ET
+
+  workflow_dispatch:
+
+
 jobs:
 
   etl:
@@ -5,13 +18,11 @@ jobs:
     runs-on: ubuntu-latest
 
 
-    # ↓↓↓––– 1)  add this services section –––↓↓↓
-
     services:
 
       postgres:
 
-        image: postgres:16-alpine          # or any tag you like
+        image: postgres:16-alpine
 
         env:
 
@@ -26,23 +37,17 @@ jobs:
           - 5432:5432
 
         options: >-
+          --health-cmd pg_isready
 
-          --health-cmd="pg_isready -U ghactions"
+          --health-interval 10s
 
-          --health-interval=10s
+          --health-timeout 5s
 
-          --health-timeout=5s
+          --health-retries 5
 
-          --health-retries=5
-
-    # ↑↑↑––– 1)  services block ends here –––↑↑↑
-
-
-    # ↓↓↓––– 2)  set env so every step knows the DSN –––↓↓↓
 
     env:
-
-      PG_DSN: postgres://ghactions:secret@localhost:5432/mlb
+      PG_DSN:  postgres://ghactions:secret@localhost:5432/mlb
 
       OUTPUT_DIR: stage
 
@@ -50,14 +55,11 @@ jobs:
 
       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
 
-    # ↑↑↑––– 2)  env block ends here –––↑↑↑
-
-
-    # ↓↓↓  your build steps stay exactly the same ↓↓↓
 
     steps:
 
       - uses: actions/checkout@v4
+
 
       - name: Cache pip
 
@@ -98,3 +100,5 @@ jobs:
 
         run: python loader/load_parquet_into_pg.py
         
+
+

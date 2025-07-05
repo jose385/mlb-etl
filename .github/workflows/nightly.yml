@@ -68,7 +68,7 @@ jobs:
 
         run: |
 
-          Rscript -e "install.packages(c('arrow','readr','lubridate'), repos='https://cloud.r-project.org')"
+          Rscript -e "install.packages(c('arrow','readr','lubridate','curl'), repos='https://cloud.r-project.org')"
           
           Rscript r/statcast_csv_pull.R
 

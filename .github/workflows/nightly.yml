@@ -6,6 +6,7 @@ name: MLB Nightly ETL
 on:
 
   schedule:
+
     - cron:  '5 4 * * *'          # 00 :05 ET
 
   workflow_dispatch:
@@ -37,6 +38,7 @@ jobs:
           - 5432:5432
 
         options: >-
+
           --health-cmd pg_isready
 
           --health-interval 10s
@@ -47,6 +49,7 @@ jobs:
 
 
     env:
+        
       PG_DSN:  postgres://ghactions:secret@localhost:5432/mlb
 
       OUTPUT_DIR: stage
@@ -99,6 +102,6 @@ jobs:
       - name: Load into Postgres
 
         run: python loader/load_parquet_into_pg.py
-        
+
 
 

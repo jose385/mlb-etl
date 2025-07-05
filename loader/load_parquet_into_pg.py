@@ -18,7 +18,9 @@ for fp in glob.glob("stage/*.parquet"):
 
     if df.empty: continue  
 
-    cols = ','.join(df.columns)  
+    cols = ','.join(df.columns)
+
+    your_file = "path/to/your/parguet_file.parquet"  
 
     with open(your_file, "rb") as f, conn.cursoe() as cur:
 

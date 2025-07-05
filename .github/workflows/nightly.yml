@@ -1,13 +1,10 @@
-# .github/workflows/nightly.yml  ← full file, keep exactly this shape
-
 name: MLB Nightly ETL
-
 
 on:
 
   schedule:
 
-    - cron:  '5 4 * * *'          # 00 :05 ET
+    - cron: '5 4 * * *'  # 00:05 ET
 
   workflow_dispatch:
 
@@ -27,11 +24,11 @@ jobs:
 
         env:
 
-          POSTGRES_USER:     ghactions
+          POSTGRES_USER: ghactions
 
           POSTGRES_PASSWORD: secret
 
-          POSTGRES_DB:       mlb
+          POSTGRES_DB: mlb
 
         ports:
 
@@ -49,12 +46,12 @@ jobs:
 
 
     env:
-        
-      PG_DSN:  postgres://ghactions:secret@localhost:5432/mlb
+
+      PG_DSN: postgres://ghactions:secret@localhost:5432/mlb
 
       OUTPUT_DIR: stage
 
-      AWS_ACCESS_KEY_ID:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
 
       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
 
@@ -84,6 +81,15 @@ jobs:
           python-version: '3.12'
 
 
+      - name: Install system dependencies
+
+        run: |
+
+          sudo apt-get update
+
+          sudo apt-get install -y libpq-dev python3-dev build-essential
+
+
       - name: Install deps
 
         run: pip install -r py/requirements.txt
@@ -102,6 +108,4 @@ jobs:
       - name: Load into Postgres
 
         run: python loader/load_parquet_into_pg.py
-
-
-
+        

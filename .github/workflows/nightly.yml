@@ -34,16 +34,6 @@ jobs:
 
           - 5432:5432
 
-        options: >-
-
-          --health-cmd pg_isready
-
-          --health-interval 10s
-
-          --health-timeout 5s
-
-          --health-retries 5
-
 
     env:
 
@@ -108,4 +98,4 @@ jobs:
       - name: Load into Postgres
 
         run: python loader/load_parquet_into_pg.py
-        
+

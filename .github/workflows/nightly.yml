@@ -16,6 +16,39 @@ jobs:
 
     runs-on: ubuntu-latest
 
+     # ↓↓↓––– 1)  add this services section –––↓↓↓
+
+    services:
+
+      postgres:
+
+        image: postgres:16-alpine          # or any tag you like
+
+        env:
+
+          POSTGRES_USER:     ghactions
+
+          POSTGRES_PASSWORD: secret
+
+          POSTGRES_DB:       mlb
+          
+        ports:
+
+          - 5432:5432
+
+        options: >-
+
+          --health-cmd="pg_isready -U ghactions"
+
+          --health-interval=10s
+
+          --health-timeout=5s
+
+          --health-retries=5
+
+    # ↑↑↑––– 1)  services block ends here –––↑↑↑
+
+
     env:
 
       OUTPUT_DIR: stage
@@ -24,7 +57,8 @@ jobs:
 
       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
 
-      PG_DSN:                ${{ secrets.PG_DSN }}
+      PG_DSN: postgres://ghactions:secret@localhost:5432/mlb
+      
 
 
     steps:

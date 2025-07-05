@@ -20,7 +20,9 @@ for fp in glob.glob("stage/*.parquet"):
 
     cols = ','.join(df.columns)  
 
-    with cur.copy(f"COPY mlb.statcast_pitchlog ({cols}) FROM STDIN") as copy:  
+    with open(your_file, "rb") as f, conn.cursoe() as cur:
+
+        cur.copy(f"COPY mlb.statcast_pitchlog ({cols}) FROM STDIN")
 
         for row in df.itertuples(index=False, name=None):  
 

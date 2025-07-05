@@ -16,7 +16,11 @@ yday = (datetime.date.today() - datetime.timedelta(days=1)).strftime("%Y-%m-%d")
 
 df = statcast(start_dt=yday, end_dt=yday)            # one call, all pitches :contentReference[oaicite:3]{index=3}
 
-pq.write_table(df.to_arrow(), f"{OUT}/statcast_{yday}.parquet")
+# NEW (works everywhere)
+
+df.to_parquet(f"{OUT}/statcast_{yday}.parquet",
+              
+              engine="pyarrow", index=False)
 
 print(f"✅ wrote {len(df):,} Statcast rows for {yday}")
 

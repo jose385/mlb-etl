@@ -5,7 +5,7 @@ on:
 
   schedule:
 
-    - cron: '5 4 * * *'      # 00:05 ET
+    - cron: '5 4 * * *'        # 00:05 ET
 
   workflow_dispatch:
 
@@ -18,72 +18,60 @@ jobs:
 
     env:
 
+      OUTPUT_DIR: stage
+
       AWS_ACCESS_KEY_ID:     ${{ secrets.AWS_ACCESS_KEY_ID }}
 
       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
 
       PG_DSN:                ${{ secrets.PG_DSN }}
 
-      OUTPUT_DIR:            stage
-
 
     steps:
 
-      - uses: actions/checkout@v4
+    - uses: actions/checkout@v4
 
 
-      # ---------- Python (StatsAPI) ----------
+    # ---------- cache pip so we don’t reinstall every run ----------
 
-      - name: Set up Python
+    - name: Cache pip
 
-        uses: actions/setup-python@v5
+      uses: actions/cache@v4                         # pip cache how-to :contentReference[oaicite:4]{index=4}
 
-        with:
+      with:
 
-          python-version: '3.12'
+        path: ~/.cache/pip
 
-
-      - name: Install Python deps
-
-        run: pip install -r py/requirements.txt
+        key: ${{ runner.os }}-pip-${{ hashFiles('py/requirements.txt') }}
 
 
-      - name: Run StatsAPI ETL
+    # ---------- Python tool-chain ----------
 
-        run: python py/statsapi_etl.py
+    - name: Set up Python
 
+      uses: actions/setup-python@v5                 # installs & adds to PATH :contentReference[oaicite:5]{index=5}
 
-      # ---------- R tool-chain ----------
-      - name: Install system dependencies  
+      with:
 
-        run: |  
-
-            sudo apt-get update  
-
-            sudo apt-get install -y libcurl4-openssl-dev  
-            
-
-      - name: Set up R
-
-        uses: r-lib/actions/setup-r@v2
-
-        with:
-
-          r-version: '4.3.3'
+        python-version: '3.12'
 
 
-      - name: Install R packages & pull Statcast
+    - name: Install deps
 
-        run: |
-
-          Rscript -e "install.packages(c('arrow','readr','lubridate','curl'), repos='https://cloud.r-project.org')"
-          
-          Rscript r/statcast_csv_pull.R
+      run: pip install -r py/requirements.txt
 
 
-      # ---------- Load into Postgres ----------
+    - name: Pull Statcast CSV
 
-      - name: Load Parquet into Postgres
+      run: python py/statcast_csv_pull.py
 
-        run: python loader/load_parquet_into_pg.py
-        
+
+    - name: Pull StatsAPI data
+
+      run: python py/statsapi_etl.py
+
+
+    - name: Load into Postgres
+
+      run: python loader/load_parquet_into_pg.py
+      

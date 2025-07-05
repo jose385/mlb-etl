@@ -20,7 +20,7 @@ for fp in glob.glob("stage/*.parquet"):
 
     cols = ','.join(df.columns)
 
-    your_file = "path/to/your/parguet_file.parquet"  
+    your_file = "stage/statcast_pitchlog.parquet"  
 
     with open(your_file, "rb") as f, conn.cursoe() as cur:
 

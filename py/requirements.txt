@@ -10,7 +10,7 @@ urllib3
 
 pybaseball>=2.0.0
 
-psycopy2-binary>=2.9.9
+psycopg2-binary>=2.9.9
 
 MLB-StatsAPI>=1.9.0   # wrapper you import as “statsapi”
 

@@ -39,8 +39,8 @@ for fp in glob.glob("stage/*.parquet"):
 
     with file_path.open("rb") as f, PG.cursor() as cur:
 
-        cur.execcute("CREATE SCHEMA IF NOT EXISTS mlb")
-        
+        cur.execute("CREATE SCHEMA IF NOT EXISTS mlb")
+
         cur.copy_expert(
 
             f"COPY mlb.statcast_pitchlog ({cols}) FROM STDIN",

@@ -27,7 +27,7 @@ for fp in glob.glob("stage/*.parquet"):
 
     output_dir = Path(os.getenv("OUTPUT_DIR", "stage"))
 
-    file_path  = output_dir / "statcast_pitchlog.parquet"
+    file_path  = Path(fp)
 
 
     if not file_path.exists():
@@ -46,7 +46,7 @@ for fp in glob.glob("stage/*.parquet"):
         )
 
     # ⬆⬆⬆ end of pasted block ⬆⬆⬆
-    
+
 
     PG.commit()  
 

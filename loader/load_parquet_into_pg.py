@@ -18,6 +18,8 @@ for fp in glob.glob("stage/*.parquet"):
 
     if df.empty: continue  
 
+    df.columns = [c.replace('.', '_').replace('-', '_') for c in df.columns]
+
     cols = ','.join(df.columns)  
 
     # ⬇⬇⬇ paste the pathlib-based loader here ⬇⬇⬇

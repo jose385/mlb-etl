@@ -18,17 +18,35 @@ for fp in glob.glob("stage/*.parquet"):
 
     if df.empty: continue  
 
-    cols = ','.join(df.columns)
+    cols = ','.join(df.columns)  
 
-    your_file = "stage/*.parquet"  
+    # ⬇⬇⬇ paste the pathlib-based loader here ⬇⬇⬇
 
-    with open(your_file, "rb") as f, conn.cursoe() as cur:
+    from pathlib import Path
 
-        cur.copy(f"COPY mlb.statcast_pitchlog ({cols}) FROM STDIN")
 
-        for row in df.itertuples(index=False, name=None):  
+    output_dir = Path(os.getenv("OUTPUT_DIR", "stage"))
 
-            copy.write_row(row)  
+    file_path  = output_dir / "statcast_pitchlog.parquet"
+
+
+    if not file_path.exists():
+
+        raise FileNotFoundError(f"No Parquet file found at {file_path.resolve()}")
+    
+
+    with file_path.open("rb") as f, PG.cursor() as cur:
+
+        cur.copy_expert(
+
+            f"COPY mlb.statcast_pitchlog ({cols}) FROM STDIN",
+
+            f
+
+        )
+
+    # ⬆⬆⬆ end of pasted block ⬆⬆⬆
+    
 
     PG.commit()  
 

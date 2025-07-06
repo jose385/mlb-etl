@@ -39,15 +39,28 @@ for fp in glob.glob("stage/*.parquet"):
 
     with file_path.open("rb") as f, PG.cursor() as cur:
 
-        cur.execute("CREATE SCHEMA IF NOT EXISTS mlb")
+    # Ensure table exists in public
 
-        cur.copy_expert(
-
-            f"COPY mlb.statcast_pitchlog ({cols}) FROM STDIN",
-
-            f
-
+         cur.execute(f"""
+                
+        CREATE TABLE IF NOT EXISTS public.statcast_pitchlog (
+                
+            ... column definitions ...
+                
         )
+                
+    """)
+
+    # Load into public.statcast_pitchlog
+
+    cur.copy_expert(
+
+        f"COPY public.statcast_pitchlog ({cols}) FROM STDIN",
+
+        f
+
+    )
+    
 
     # ⬆⬆⬆ end of pasted block ⬆⬆⬆
 

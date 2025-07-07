@@ -130,9 +130,6 @@ with PG, PG.cursor() as cur:
                 
             atbatindex         INTEGER,
                 
-            count_balls        INTEGER,
-                
-            count_strikes      INTEGER,
                 
             inning              INTEGER,
                 

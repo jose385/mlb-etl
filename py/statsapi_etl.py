@@ -32,7 +32,7 @@ def main(start_date: str, end_date: str):
         rows = []
 
 
-        # statsapi.schedule returns a list of dicts
+        # Fetch schedule for the day
 
         sched = statsapi.schedule(start_date=yday, end_date=yday)
 
@@ -42,31 +42,35 @@ def main(start_date: str, end_date: str):
 
             for g in df_sched.itertuples():
 
-                game_pk = g.game_id  # or g.game_pk depending on your statsapi version
+                game_pk = g.game_id  # or .game_pk depending on your statsapi version
+
+
+                # Try the correct endpoint
 
                 try:
-                       
-+            # Use the correct endpoint name: game_playByPlay
 
-+            resp = statsapi.get('game_playByPlay', {'gamePk': game_pk})
+                    resp = statsapi.get('game_playByPlay', {'gamePk': game_pk})
 
-+        except Exception as e:
+                except Exception as e:
 
-+            print(f"❌ PBP error for game {game_pk} on {yday}: {e}")
+                    print(f"❌ PBP error for game {game_pk} on {yday}: {e}")
 
-+            continue
+                    continue
 
-+
-+        # The JSON may nest the plays two different ways:
 
-+        plays = resp.get('allPlays') \
+                # Extract plays from either top‐level or nested liveData
 
-+                or resp.get('liveData', {}) \
+                plays = (
 
-+                         .get('plays', {}) \
+                    resp.get('allPlays')
 
-+                         .get('allPlays', [])
+                    or resp.get('liveData', {})
 
+                           .get('plays', {})
+
+                           .get('allPlays', [])
+
+                )
 
 
                 for pl in plays:
@@ -82,11 +86,11 @@ def main(start_date: str, end_date: str):
 
             df = pd.json_normalize(rows)
 
-            path = f"{OUT}/statsapi_{yday}.parquet"
+            out = f"{OUT}/statsapi_{yday}.parquet"
 
-            df.to_parquet(path, index=False)
+            df.to_parquet(out, index=False)
 
-            print(f"✅ Wrote {len(df)} StatsAPI rows → {path}")
+            print(f"✅ Wrote {len(df)} StatsAPI rows → {out}")
 
 
         current += timedelta(days=1)
@@ -107,6 +111,8 @@ if __name__ == "__main__":
     args = p.parse_args()
 
 
+    # default to yesterday if no start provided
+
     if not args.start:
 
         args.start = (pd.Timestamp.today() - pd.Timedelta(days=1)).strftime("%Y-%m-%d")
@@ -117,4 +123,4 @@ if __name__ == "__main__":
 
 
     main(args.start, args.end)
-
+    

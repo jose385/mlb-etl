@@ -9,6 +9,7 @@ import statsapi
 from datetime import datetime
 
 
+
 # 1. Setup output directory
 
 OUT = os.getenv("OUTPUT_DIR", "stage")
@@ -18,9 +19,9 @@ os.makedirs(OUT, exist_ok=True)
 
 # 2. Today's date
 
-today = pd.Timestamp.today()
+today  = pd.Timestamp.today()
 
-yday  = today.strftime("%Y-%m-%d")
+yday   = today.strftime("%Y-%m-%d")
 
 season = today.year
 
@@ -36,29 +37,45 @@ for game in schedule:
 
     for team_id, side in ((game["home_id"], "home"), (game["away_id"], "away")):
 
-        # CALL roster(team_id, season), not game_date
+        # 4a. Call roster; statsapi.roster may return dict or list
 
-        roster_list = statsapi.roster(team_id, season=season)
+        data = statsapi.roster(team_id, season=season)
 
-        if not roster_list:
+
+        # 4b. Extract the actual list of player records
+
+        if isinstance(data, dict):
+
+            records = data.get("roster", [])
+
+        elif isinstance(data, list):
+
+            records = data
+
+        else:
+
+            records = []
+
+
+        if not records:
 
             continue
 
 
-        # Convert list of dicts to DataFrame
+        # 4c. Build a DataFrame from that list
 
-        roster_df = pd.DataFrame(roster_list)
+        roster_df = pd.DataFrame(records)
 
         roster_df["team_id"]   = team_id
 
-        roster_df["game_date"] = yday      # as string YYYY-MM-DD
+        roster_df["game_date"] = yday      # YYYY-MM-DD
 
         roster_df["side"]      = side      # 'home' or 'away'
 
         rows.append(roster_df)
 
 
-# 4. Write out if any data
+# 5. Write out if any data
 
 if not rows:
 
@@ -69,10 +86,13 @@ if not rows:
 
 df = pd.concat(rows, ignore_index=True)
 
-# sanitize column names
+
+# 6. Sanitize column names
 
 df.columns = [c.replace(".", "_").replace("-", "_").lower() for c in df.columns]
 
+
+# 7. Save to Parquet
 
 out_path = f"{OUT}/roster_{yday}.parquet"
 

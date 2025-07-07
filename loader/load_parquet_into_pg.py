@@ -123,7 +123,7 @@ with PG, PG.cursor() as cur:
                 
             count_strikes      INTEGER,
                 
-            pitchindex         INTEGER,
+            pitchindex         INTEGER
                 
                 
             -- add more columns as needed

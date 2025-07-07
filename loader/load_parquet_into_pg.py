@@ -168,7 +168,7 @@ CREATE TABLE IF NOT EXISTS mlb.roster (
                 
   team_id      INTEGER REFERENCES mlb.team(team_id),
                 
-  player_id    INTEGER REFERENCES mlb.player(pClayer_id),
+  player_id    INTEGER REFERENCES mlb.player(player_id),
                 
   side         TEXT,
                 

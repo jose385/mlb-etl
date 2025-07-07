@@ -37,7 +37,7 @@ jobs:
 
     env:
 
-      PG_DSN: postgres1://ghactions:secret@localhost:5432/mlb
+      PG_DSN: postgres://ghactions:secret@localhost:5432/mlb
 
       OUTPUT_DIR: stage
 

@@ -156,6 +156,9 @@ for fp in glob.glob(f"{OUTPUT_DIR}/*.parquet"):
 
     df.columns = [c.replace('.', '_').replace('-', '_').lower() for c in df.columns]
 
+    print("[DDL SYNC] StatsAPI columns:", df.columns.tolist())
+    
+
     cols = ','.join(df.columns)
 
 

@@ -6,6 +6,8 @@ import pandas as pd
 
 import statsapi
 
+from datetime import datetime
+
 
 # 1. Setup output directory
 
@@ -16,58 +18,65 @@ os.makedirs(OUT, exist_ok=True)
 
 # 2. Today's date
 
-today = pd.Timestamp.today().strftime("%Y-%m-%d")
+today = pd.Timestamp.today()
+
+yday  = today.strftime("%Y-%m-%d")
+
+season = today.year
 
 
-# 3. Fetch schedule for today (returns a list of dicts)
+# 3. Fetch schedule for today (list of dicts)
 
-schedule = statsapi.schedule(start_date=today, end_date=today)
+schedule = statsapi.schedule(start_date=yday, end_date=yday)
 
-
-# 4. Collect rosters
 
 rows = []
 
-for g in schedule:
+for game in schedule:
 
-    # g is a dict, not a DataFrame row
+    for team_id, side in ((game["home_id"], "home"), (game["away_id"], "away")):
 
-    for team_id, side in ((g['home_id'], 'home'), (g['away_id'], 'away')):
+        # CALL roster(team_id, season), not game_date
 
-        roster_df = statsapi.roster(team_id, game_date=today)
+        roster_list = statsapi.roster(team_id, season=season)
 
-        # Ensure this block is indented under the for-loop
-
-        if roster_df.empty:
+        if not roster_list:
 
             continue
 
-        roster_df['team_id']   = team_id
 
-        roster_df['game_date'] = today
+        # Convert list of dicts to DataFrame
 
-        roster_df['side']      = side
+        roster_df = pd.DataFrame(roster_list)
+
+        roster_df["team_id"]   = team_id
+
+        roster_df["game_date"] = yday      # as string YYYY-MM-DD
+
+        roster_df["side"]      = side      # 'home' or 'away'
 
         rows.append(roster_df)
 
 
-# 5. Write out if any data
+# 4. Write out if any data
 
 if not rows:
 
-    print(f"✅ No rosters for {today}")
+    print(f"✅ No rosters for {yday}")
 
-else:
+    exit(0)
 
-    df = pd.concat(rows, ignore_index=True)
 
-    # sanitize column names
+df = pd.concat(rows, ignore_index=True)
 
-    df.columns = [c.replace('.', '_').replace('-', '_').lower() for c in df.columns]
+# sanitize column names
 
-    out_path = f"{OUT}/roster_{today}.parquet"
+df.columns = [c.replace(".", "_").replace("-", "_").lower() for c in df.columns]
 
-    df.to_parquet(out_path, index=False)
 
-    print(f"✅ Wrote {len(df)} roster rows → {out_path}")
-    
+out_path = f"{OUT}/roster_{yday}.parquet"
+
+df.to_parquet(out_path, index=False)
+
+print(f"✅ Wrote {len(df)} roster rows → {out_path}")
+

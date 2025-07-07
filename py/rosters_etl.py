@@ -26,13 +26,16 @@ schedule = statsapi.schedule(start_date=today, end_date=today)
 
 rows = []
 
-for g in schedule.itertuples():
+for g in schedule:
+      
+      # g is a dict with keys like 'game_id', 'home_id', 'away_id'
 
-    for team_id, side in ((g.home_id, 'home'), (g.away_id, 'away')):
-
-        roster_df = statsapi.roster(team_id, game_date=today)
+      for team_id, side in ((g['home_id'], 'home'), (g['away_id'], 'away')):
+          
+          roster_df = statsapi.roster(team_id, game_date=today)
 
         if roster_df.empty:
+            
 
             continue
 

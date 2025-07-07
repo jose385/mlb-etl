@@ -45,16 +45,28 @@ def main(start_date: str, end_date: str):
                 game_pk = g.game_id  # or g.game_pk depending on your statsapi version
 
                 try:
+                       
++            # Use the correct endpoint name: game_playByPlay
 
-                    pbp = statsapi.get('playByPlay', {'gamePk': game_pk})
++            resp = statsapi.get('game_playByPlay', {'gamePk': game_pk})
 
-                    plays = pbp.get('allPlays', [])
++        except Exception as e:
 
-                except Exception as e:
++            print(f"❌ PBP error for game {game_pk} on {yday}: {e}")
 
-                    print(f"❌ PBP error for game {game_pk} on {yday}: {e}")
++            continue
 
-                    continue
++
++        # The JSON may nest the plays two different ways:
+
++        plays = resp.get('allPlays') \
+
++                or resp.get('liveData', {}) \
+
++                         .get('plays', {}) \
+
++                         .get('allPlays', [])
+
 
 
                 for pl in plays:
@@ -105,4 +117,4 @@ if __name__ == "__main__":
 
 
     main(args.start, args.end)
-    
+

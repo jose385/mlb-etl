@@ -123,6 +123,9 @@ with PG, PG.cursor() as cur:
                 
             count_strikes      INTEGER
                 
+            pitchindex         INTEGER,
+                
+                
             -- add more columns as needed
                 
         );
@@ -189,4 +192,4 @@ for fp in glob.glob(f"{OUTPUT_DIR}/*.parquet"):
         )
 
     print(f"→ Loaded {len(df)} rows into {table} from {fp}")
-    
+

@@ -19,53 +19,55 @@ os.makedirs(OUT, exist_ok=True)
 today = pd.Timestamp.today().strftime("%Y-%m-%d")
 
 
-# 3. Fetch schedule for today
+# 3. Fetch schedule for today (returns a list of dicts)
 
 schedule = statsapi.schedule(start_date=today, end_date=today)
 
 
+# 4. Collect rosters
+
 rows = []
 
 for g in schedule:
-      
-      # g is a dict with keys like 'game_id', 'home_id', 'away_id'
 
-      for team_id, side in ((g['home_id'], 'home'), (g['away_id'], 'away')):
-          
-          roster_df = statsapi.roster(team_id, game_date=today)
+    # g is a dict, not a DataFrame row
+
+    for team_id, side in ((g['home_id'], 'home'), (g['away_id'], 'away')):
+
+        roster_df = statsapi.roster(team_id, game_date=today)
+
+        # Ensure this block is indented under the for-loop
 
         if roster_df.empty:
-            
 
             continue
 
         roster_df['team_id']   = team_id
 
-        roster_df['game_date'] = today  # YYYY-MM-DD string
+        roster_df['game_date'] = today
 
-        roster_df['side']      = side    # 'home' or 'away'
+        roster_df['side']      = side
 
         rows.append(roster_df)
 
 
-# 4. Concatenate & sanitize
+# 5. Write out if any data
 
 if not rows:
 
     print(f"✅ No rosters for {today}")
 
-    exit(0)
+else:
 
+    df = pd.concat(rows, ignore_index=True)
 
-df = pd.concat(rows, ignore_index=True)
+    # sanitize column names
 
-df.columns = [c.replace('.', '_').replace('-', '_').lower() for c in df.columns]
+    df.columns = [c.replace('.', '_').replace('-', '_').lower() for c in df.columns]
 
+    out_path = f"{OUT}/roster_{today}.parquet"
 
-# 5. Write Parquet
+    df.to_parquet(out_path, index=False)
 
-out_path = f"{OUT}/roster_{today}.parquet"
-
-df.to_parquet(out_path, index=False)
-
-print(f"✅ Wrote {len(df)} roster rows → {out_path}")
+    print(f"✅ Wrote {len(df)} roster rows → {out_path}")
+    

@@ -1,74 +1,79 @@
 #!/usr/bin/env python
 
-import os, glob
+import os
+
+import glob
 
 from io import StringIO
 
 from pathlib import Path
 
 
+
 import duckdb
 
 import psycopg2
 
-from sqlalchemy import create_engine, inspect
 
-
-# Create an SQLAlchemy engine & inspector on the same DSN you use for psycopg2
-
-engine    = create_engine(os.environ['PG_DSN'])
-
-inspector = inspect(engine)
-
-
-def sync_columns(table_schema: str, table_name: str, df_cols: list):
-
-    """
-
-    Add any df_cols missing from the Postgres table.
-
-    Defaults to TEXT for new columns.
-
-    """
-
-    existing = {c['name'] for c in inspector.get_columns(table_name, schema=table_schema)}
-
-    missing  = [c for c in df_cols if c not in existing]
-
-    if not missing:
-
-        return
-    
-    with engine.begin() as conn:
-
-        for col in missing:
-
-            conn.execute(
-
-                f"ALTER TABLE {table_schema}.{table_name} "
-
-                f"ADD COLUMN IF NOT EXISTS {col} TEXT;"
-
-            )
-
-            print(f"[DDL SYNC] Added missing column: {col}")
-
-
-
-
-# 1) Connect & prepare
+# 1) Connect
 
 PG = psycopg2.connect(os.environ["PG_DSN"])
 
 duck = duckdb.connect()
 
 
-# 2) Ensure schemas & tables exist
+def sync_columns_psycopg2(conn, schema: str, table: str, df_cols: list):
 
-with PG, PG.cursor() as cur:
+    """
 
-    # Statcast table
-    
+    Add any df_cols missing from the Postgres table, using
+
+    information_schema and psycopg2 only.
+
+    """
+
+    with conn.cursor() as cur:
+
+        # Fetch existing column names
+
+        cur.execute("""
+                    
+            SELECT column_name
+                    
+            FROM information_schema.columns
+                    
+            WHERE table_schema = %s
+                    
+              AND table_name   = %s
+                    
+        """, (schema, table))
+
+        existing = {row[0] for row in cur.fetchall()}
+
+
+        # For each missing column, ALTER TABLE ADD COLUMN TEXT
+
+        for col in df_cols:
+
+            if col not in existing:
+
+                cur.execute(
+
+                    f"ALTER TABLE {schema}.{table} "
+
+                    f"ADD COLUMN IF NOT EXISTS {col} TEXT;"
+
+                )
+
+                print(f"[DDL SYNC] Added missing column: {col}")
+
+    conn.commit()
+
+
+# 2) Ensure schemas & static tables (pitchlog and playlog) exist up front
+
+with PG.cursor() as cur:
+
     cur.execute("CREATE SCHEMA IF NOT EXISTS mlb;")
 
     cur.execute("""
@@ -93,47 +98,13 @@ with PG, PG.cursor() as cur:
                 
             plate_x        REAL,
                 
-            plate_z        REAL,
+            plate_z        REAL
                 
-            events         TEXT,
-
-            description    TEXT,
-                
-            zone           INTEGER,
-                
-            stand          TEXT,
-                
-            p_throws       TEXT,
-
-            home_team      TEXT,
-                
-            away_team      TEXT,
-                
-            home_score     INTEGER,
-                
-            away_score     INTEGER,
-                
-            at_bat_number  INTEGER,
-
-            pitch_number   INTEGER,
-                
-            plate_time     REAL,
-                
-            spin_rate      REAL,
-
-            launch_speed   REAL,
-                
-            launch_angle   REAL,
-                
-            distance       REAL,
-                
-            result_type    TEXT
+            -- add other known Statcast columns here if desired
                 
         );
                 
     """)
-
-    # StatsAPI table
 
     cur.execute("""
                 
@@ -143,118 +114,70 @@ with PG, PG.cursor() as cur:
                 
             about_inning       INTEGER,
                 
-            about_halfInning   TEXT,
+            about_halfinning   TEXT,
                 
-            about_isComplete   BOOLEAN,
+            about_iscomplete   BOOLEAN,
                 
             result_event       TEXT,
-
+                
             result_description TEXT,
                 
-            result_rbi         INTEGER,
+            result_rbi         INTEGER
                 
-            result_homeScore   INTEGER,
-
-            result_awayScore   INTEGER,
-                
-            matchup_batter_id  INTEGER,
-                
-            matchup_batter_name TEXT,
-
-            matchup_pitcher_id INTEGER,
-                
-            count_balls        INTEGER,
-                
-            count_strikes      INTEGER,
-                
-            pitchindex         INTEGER,
-                
-
-            actionindex        INTEGER,
-                
-            atbatindex         INTEGER,
-                
-            runnerindex        INTEGER,
-                
-            runnersindex        INTEGER,
-                
-            runners             TEXT,
-                
-            playevents          TEXT,
-                
-            playendtime         TEXT,
-                
-                
-            inning              INTEGER,
-                
-            matchupid          INTEGER,
-                
-            batter             INTEGER,
-                
-            pitcher            INTEGER
-                
-                   
-                 
-                
-                
-            -- add more columns as needed
+            -- add a few core StatsAPI columns; the rest will get ALTERed in
                 
         );
-
+                
     """)
 
+    PG.commit()
 
-# 3) Load each Parquet
 
-OUTPUT_DIR = Path(os.getenv("OUTPUT_DIR", "stage"))
+# 3) Load loop
+
+OUTPUT_DIR = os.getenv("OUTPUT_DIR", "stage")
 
 for fp in glob.glob(f"{OUTPUT_DIR}/*.parquet"):
 
     file_path = Path(fp)
 
-    # Read via DuckDB
-
-    df = duck.execute(f"SELECT * FROM read_parquet('{fp}')").fetch_df()
+    df        = duck.execute(f"SELECT * FROM read_parquet('{fp}')").fetch_df()
 
     if df.empty:
 
-        print(f"→ Skipping empty file: {fp}")
+        print(f"→ skipping empty {fp}")
 
         continue
 
 
-    # sanitize names
 
-    df.columns = [c.replace('.', '_').replace('-', '_').lower() for c in df.columns]
+    # 3a) sanitize & lowercase columns
 
-    print("[DDL SYNC] StatsAPI columns:", df.columns.tolist())
-
-
+    df.columns = [c.replace('.', '_').replace('-', '_').lower()
+                  
+                  for c in df.columns]
+    
     cols = ','.join(df.columns)
 
-    # --- insert this block ---
 
-    df_cols = df.columns.tolist()
+    # 3b) auto‐sync missing columns into the right table
 
-    # pick the right table name (no schema prefix) based on filename
+    df_cols    = df.columns.tolist()
 
     if 'statsapi' in fp.lower():
 
-        table_name = 'statsapi_playlog'
+        sync_columns_psycopg2(PG, 'mlb', 'statsapi_playlog', df_cols)
+
+        table = 'statsapi_playlog'
 
     else:
 
-        table_name = 'statcast_pitchlog'
+        sync_columns_psycopg2(PG, 'mlb', 'statcast_pitchlog', df_cols)
 
-    # auto-add any missing columns in mlb.<table_name>
-
-    sync_columns('mlb', table_name, df_cols)
-
-    # --- end insertion ---
-    
+        table = 'statcast_pitchlog'
 
 
-    # convert to CSV in-memory
+    # 3c) stream CSV into Postgres
 
     buf = StringIO()
 
@@ -263,28 +186,20 @@ for fp in glob.glob(f"{OUTPUT_DIR}/*.parquet"):
     buf.seek(0)
 
 
-    # determine target table
-
-    if "statsapi" in fp.lower():
-
-        table = "mlb.statsapi_playlog"
-
-    else:
-
-        table = "mlb.statcast_pitchlog"
-
-
-    # COPY into Postgres
-
-    with PG, PG.cursor() as cur:
+    with PG.cursor() as cur:
 
         cur.copy_expert(
 
-            f"COPY {table} ({cols}) FROM STDIN WITH (FORMAT CSV)",
+            f"COPY mlb.{table} ({cols}) FROM STDIN WITH (FORMAT CSV)",
 
             buf
 
         )
 
-    print(f"→ Loaded {len(df)} rows into {table} from {fp}")
+    PG.commit()
+
+    print(f"→ loaded {len(df)} rows into mlb.{table} from {fp}")
+
+
+PG.close()
 

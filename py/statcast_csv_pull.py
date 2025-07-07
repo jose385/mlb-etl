@@ -1,38 +1,89 @@
 #!/usr/bin/env python
 
-"""Pull yesterday’s full Statcast feed via pybaseball and write Parquet."""
+import os
 
-import os, datetime, pyarrow.parquet as pq
+import argparse
 
-from pybaseball import statcast                      # wrapper docs :contentReference[oaicite:2]{index=2}
-
-
-OUT = os.getenv("OUTPUT_DIR", "stage")
-
-os.makedirs(OUT, exist_ok=True)
-
-yday = (datetime.date.today() - datetime.timedelta(days=1)).strftime("%Y-%m-%d")
+import pandas as pd
 
 
-df = statcast(start_dt=yday, end_dt=yday)            # one call, all pitches :contentReference[oaicite:3]{index=3}
+from pybaseball import statcast
 
-# NEW (works everywhere)
+from datetime import datetime, timedelta
 
-# after you’ve fetched df via pybaseball.statcast(...)
 
-if df.empty:
+def main(start_date: str, end_date: str):
 
-    print(f"✅ No Statcast data for {yday}")
+    OUT = os.getenv("OUTPUT_DIR", "stage")
 
-else:
+    os.makedirs(OUT, exist_ok=True)
 
-    out_path = f"{OUT}/statcast_{yday}.parquet"
 
-    df.to_parquet(out_path, index=False)
+    start = datetime.fromisoformat(start_date)
 
-    print(f"✅ Wrote {len(df)} Statcast rows for {yday} → {out_path}")
+    end   = datetime.fromisoformat(end_date)
+
+    current = start
+
+
+    while current <= end:
+
+        yday = current.strftime("%Y-%m-%d")
+
+        try:
+
+            df = statcast(start_dt=yday, end_dt=yday)
+            
+        except Exception as e:
+
+            print(f"❌ Statcast error for {yday}: {e}")
+
+            current += timedelta(days=1)
+
+            continue
+
+
+        if df.empty:
+
+            print(f"✅ No Statcast data for {yday}")
+
+        else:
+
+            path = f"{OUT}/statcast_{yday}.parquet"
+
+            df.to_parquet(path, index=False)
+
+            print(f"✅ Wrote {len(df)} Statcast rows → {path}")
+
+
+        current += timedelta(days=1)
+
+
+if __name__ == "__main__":
+
+    p = argparse.ArgumentParser()
+
+    p.add_argument("--start", required=False,
+                   
+                   help="YYYY-MM-DD (default=yesterday)")
     
+    p.add_argument("--end",   required=False,
+                   
+                   help="YYYY-MM-DD (default=start)")
+    
+    args = p.parse_args()
 
 
-print(f"✅ wrote {len(df):,} Statcast rows for {yday}")
+    # defaults
 
+    if not args.start:
+
+        args.start = (pd.Timestamp.today() - pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+
+    if not args.end:
+
+        args.end = args.start
+
+
+    main(args.start, args.end)
+    

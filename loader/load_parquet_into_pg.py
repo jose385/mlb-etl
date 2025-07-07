@@ -1,282 +1,227 @@
 #!/usr/bin/env python
 
-import os
-
-import glob
+import os, glob
 
 from io import StringIO
 
 from pathlib import Path
 
 
-
 import duckdb
+
+
 
 import psycopg2
 
 
-# 1) Connect
+# ——— 1) Connect to Postgres with URL parsing ——————————————————————
 
-PG = psycopg2.connect(os.environ["PG_DSN"])
+def connect():
 
-duck = duckdb.connect()
+    raw = os.environ["PG_DSN"]
+
+    if raw.startswith("postgres://"):
+
+        from urllib.parse import urlparse
+
+        u = urlparse(raw.replace("postgres://", "postgresql://", 1))
+
+        return psycopg2.connect(
+
+            host=u.hostname, port=u.port,
+
+            user=u.username, password=u.password,
+
+            dbname=u.path.lstrip("/")
+
+        )
+    
+    return psycopg2.connect(raw)
 
 
-def sync_columns_psycopg2(conn, schema: str, table: str, df_cols: list):
+# ——— 2) Initialize schemas & tables —————————————————————————
 
-    """
+def init_schema(conn):
 
-    Add any df_cols missing from the Postgres table, using
+    ddl = """
 
-    information_schema and psycopg2 only.
+    CREATE SCHEMA IF NOT EXISTS mlb;
+
+
+    CREATE TABLE IF NOT EXISTS mlb.statcast_pitchlog (
+
+      game_date DATE, game_pk INT, pitcher INT, batter INT,
+
+      pitch_type TEXT, release_speed REAL,
+
+      release_pos_x REAL, release_pos_z REAL,
+
+      plate_x REAL, plate_z REAL
+
+      /* add any static Statcast columns here */
+
+    );
+
+
+    CREATE TABLE IF NOT EXISTS mlb.statsapi_playlog (
+
+      game_pk INT, atbat_index INT, pitch_index INT,
+
+      result_event TEXT, result_description TEXT
+
+      /* add core PBP columns, extras will be added dynamically */
+
+    );
+
+
+    CREATE TABLE IF NOT EXISTS mlb.team (
+
+      team_id INT PRIMARY KEY, team_name TEXT, abbreviation TEXT
+
+    );
+
+
+    CREATE TABLE IF NOT EXISTS mlb.player (
+
+      player_id INT PRIMARY KEY, full_name TEXT,
+
+      position TEXT, bats TEXT, throws TEXT
+
+    );
+
+
+    CREATE TABLE IF NOT EXISTS mlb.roster (
+
+      game_date DATE, team_id INT REFERENCES mlb.team,
+
+      player_id INT REFERENCES mlb.player,
+
+      side TEXT, status TEXT,
+
+      PRIMARY KEY(game_date, team_id, player_id)
+
+    );
 
     """
 
     with conn.cursor() as cur:
 
-        # Fetch existing column names
+        cur.execute(ddl)
+
+    conn.commit()
+
+
+# ——— 3) Dynamic ADD COLUMN helper ———————————————————————————
+
+def sync_columns(conn, schema, table, cols):
+
+    with conn.cursor() as cur:
 
         cur.execute("""
                     
             SELECT column_name
                     
-            FROM information_schema.columns
+              FROM information_schema.columns
                     
-            WHERE table_schema = %s
+             WHERE table_schema = %s
                     
-              AND table_name   = %s
+               AND table_name   = %s
                     
         """, (schema, table))
 
-        existing = {row[0] for row in cur.fetchall()}
+        existing = {r[0] for r in cur.fetchall()}
 
+        for c in cols:
 
-        # For each missing column, ALTER TABLE ADD COLUMN TEXT
-
-        for col in df_cols:
-
-            if col not in existing:
+            if c not in existing:
 
                 cur.execute(
 
                     f"ALTER TABLE {schema}.{table} "
 
-                    f"ADD COLUMN IF NOT EXISTS {col} TEXT;"
+                    f"ADD COLUMN IF NOT EXISTS {c} TEXT;"
 
                 )
-
-                print(f"[DDL SYNC] Added missing column: {col}")
 
     conn.commit()
 
 
-# 2) Ensure schemas & static tables (pitchlog and playlog) exist up front
+# ——— 4) Main loader loop —————————————————————————————————————
 
-with PG.cursor() as cur:
+def main():
 
-    cur.execute("CREATE SCHEMA IF NOT EXISTS mlb;")
+    conn = connect()
 
-    cur.execute("""
-                
-        CREATE TABLE IF NOT EXISTS mlb.statcast_pitchlog (
-                
-            game_date      DATE,
-                
-            game_pk        INTEGER,
-                
-            pitcher        INTEGER,
-                
-            batter         INTEGER,
-                
-            pitch_type     TEXT,
-                
-            release_speed  REAL,
-                
-            release_pos_x  REAL,
-                
-            release_pos_z  REAL,
-                
-            plate_x        REAL,
-                
-            plate_z        REAL
-                
-            -- add other known Statcast columns here if desired
-                
-        );
-                
-    """)
+    init_schema(conn)
 
-    cur.execute("""
-                
-        CREATE TABLE IF NOT EXISTS mlb.statsapi_playlog (
-                
-            game_pk            INTEGER,
-                
-            about_inning       INTEGER,
-                
-            about_halfinning   TEXT,
-                
-            about_iscomplete   BOOLEAN,
-                
-            result_event       TEXT,
-                
-            result_description TEXT,
-                
-            result_rbi         INTEGER
-                
-            -- add a few core StatsAPI columns; the rest will get ALTERed in
-                
-        );
-                
-    """)
+    du   = duckdb.connect()
 
-    cur.execute("""
-                
-        CREATE TABLE IF NOT EXISTS mlb.team (
-                
-  team_id      INTEGER PRIMARY KEY,
-                
-  team_name    TEXT,
-                
-  abbreviation TEXT
-                
-);
-                
-
--- Players dimension
-                
-CREATE TABLE IF NOT EXISTS mlb.player (
-                
-  player_id    INTEGER PRIMARY KEY,
-                
-  full_name    TEXT,
-                
-  position     TEXT,
-                
-  bats         TEXT,
-                
-  throws       TEXT
-                
-);
-                
-
--- Roster fact table
-                
-CREATE TABLE IF NOT EXISTS mlb.roster (
-                
-  game_date    DATE,
-                
-  team_id      INTEGER REFERENCES mlb.team(team_id),
-                
-  player_id    INTEGER REFERENCES mlb.player(player_id),
-                
-  side         TEXT,
-                
-  status       TEXT,
-                
-  PRIMARY KEY (game_date, team_id, player_id)
-                
-);
-                        
-                
-    """)
+    OUT  = os.getenv("OUTPUT_DIR", "stage")
 
 
-    PG.commit()
+    for fp in glob.glob(f"{OUT}/*.parquet"):
+
+        df = du.execute(f"SELECT * FROM read_parquet('{fp}')").fetch_df()
+
+        if df.empty:
+
+            continue
 
 
-# 3) Load loop
+        # sanitize column names
 
-OUTPUT_DIR = os.getenv("OUTPUT_DIR", "stage")
-
-for fp in glob.glob(f"{OUTPUT_DIR}/*.parquet"):
-
-    file_path = Path(fp)
-
-    df        = duck.execute(f"SELECT * FROM read_parquet('{fp}')").fetch_df()
-
-    if df.empty:
-
-        print(f"→ skipping empty {fp}")
-
-        continue
+        df.columns = [c.replace('.', '_').replace('-', '_').lower()
+                      
+                      for c in df.columns]
+        
+        cols = ','.join(df.columns)
 
 
+        name = Path(fp).name
 
-    # 3a) sanitize & lowercase columns
+        if name.startswith("roster_"):
 
-    df.columns = [c.replace('.', '_').replace('-', '_').lower()
-                  
-                  for c in df.columns]
+            table = "roster"
+
+        elif name.startswith("statsapi_"):
+
+            table = "statsapi_playlog"
+
+        else:
+
+            table = "statcast_pitchlog"
+
+
+        sync_columns(conn, "mlb", table, df.columns.tolist())
+
+
+        # stream CSV into Postgres
+
+        buf = StringIO()
+
+        df.to_csv(buf, index=False, header=False)
+
+        buf.seek(0)
+
+        with conn.cursor() as cur:
+
+            cur.copy_expert(
+
+                f"COPY mlb.{table} ({cols}) FROM STDIN WITH (FORMAT CSV)",
+
+                buf
+
+            )
+
+        conn.commit()
+
+        print(f"→ Loaded {len(df)} rows into mlb.{table}")
+
+
+    conn.close()
+
+
+if __name__ == "__main__":
+
+    main()
     
-    cols = ','.join(df.columns)
-
-# Detect roster file
-
-+    if fp.lower().startswith(f"{OUTPUT_DIR}/roster_"):
-
-+        table = 'roster'
-
-+        # auto-sync roster columns
-
-+        sync_columns_psycopg2(PG, 'mlb', table, df.columns.tolist())
-
-+    else:
-
-+        # existing pitch/play logic
-
-+        if 'statsapi' in fp.lower():
-
-+            table = 'statsapi_playlog'
-
-+        else:
-
-+            table = 'statcast_pitchlog'
-
-+        sync_columns_psycopg2(PG, 'mlb', table, df.columns.tolist())
-
-
-
-    # 3b) auto‐sync missing columns into the right table
-
-    df_cols    = df.columns.tolist()
-
-    if 'statsapi' in fp.lower():
-
-        sync_columns_psycopg2(PG, 'mlb', 'statsapi_playlog', df_cols)
-
-        table = 'statsapi_playlog'
-
-    else:
-
-        sync_columns_psycopg2(PG, 'mlb', 'statcast_pitchlog', df_cols)
-
-        table = 'statcast_pitchlog'
-
-
-    # 3c) stream CSV into Postgres
-
-    buf = StringIO()
-
-    df.to_csv(buf, index=False, header=False)
-
-    buf.seek(0)
-
-
-    with PG.cursor() as cur:
-
-        cur.copy_expert(
-
-            f"COPY mlb.{table} ({cols}) FROM STDIN WITH (FORMAT CSV)",
-
-            buf
-
-        )
-
-    PG.commit()
-
-    print(f"→ loaded {len(df)} rows into mlb.{table} from {fp}")
-
-
-PG.close()
-

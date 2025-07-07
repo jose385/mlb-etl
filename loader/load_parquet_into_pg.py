@@ -130,6 +130,58 @@ with PG.cursor() as cur:
                 
     """)
 
+    cur.execute("""
+                
+        CREATE TABLE IF NOT EXISTS mlb.team (
+                
+  team_id      INTEGER PRIMARY KEY,
+                
+  team_name    TEXT,
+                
+  abbreviation TEXT
+                
+);
+                
+
+-- Players dimension
+                
+CREATE TABLE IF NOT EXISTS mlb.player (
+                
+  player_id    INTEGER PRIMARY KEY,
+                
+  full_name    TEXT,
+                
+  position     TEXT,
+                
+  bats         TEXT,
+                
+  throws       TEXT
+                
+);
+                
+
+-- Roster fact table
+                
+CREATE TABLE IF NOT EXISTS mlb.roster (
+                
+  game_date    DATE,
+                
+  team_id      INTEGER REFERENCES mlb.team(team_id),
+                
+  player_id    INTEGER REFERENCES mlb.player(pClayer_id),
+                
+  side         TEXT,
+                
+  status       TEXT,
+                
+  PRIMARY KEY (game_date, team_id, player_id)
+                
+);
+                        
+                
+    """)
+
+
     PG.commit()
 
 
@@ -158,6 +210,31 @@ for fp in glob.glob(f"{OUTPUT_DIR}/*.parquet"):
                   for c in df.columns]
     
     cols = ','.join(df.columns)
+
+# Detect roster file
+
++    if fp.lower().startswith(f"{OUTPUT_DIR}/roster_"):
+
++        table = 'roster'
+
++        # auto-sync roster columns
+
++        sync_columns_psycopg2(PG, 'mlb', table, df.columns.tolist())
+
++    else:
+
++        # existing pitch/play logic
+
++        if 'statsapi' in fp.lower():
+
++            table = 'statsapi_playlog'
+
++        else:
+
++            table = 'statcast_pitchlog'
+
++        sync_columns_psycopg2(PG, 'mlb', table, df.columns.tolist())
+
 
 
     # 3b) auto‐sync missing columns into the right table

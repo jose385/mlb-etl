@@ -121,7 +121,7 @@ with PG, PG.cursor() as cur:
                 
             count_balls        INTEGER,
                 
-            count_strikes      INTEGER
+            count_strikes      INTEGER,
                 
             pitchindex         INTEGER,
                 

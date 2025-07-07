@@ -18,9 +18,21 @@ df = statcast(start_dt=yday, end_dt=yday)            # one call, all pitches :co
 
 # NEW (works everywhere)
 
-df.to_parquet(f"{OUT}/statcast_{yday}.parquet",
-              
-              engine="pyarrow", index=False)
+# after you’ve fetched df via pybaseball.statcast(...)
+
+if df.empty:
+
+    print(f"✅ No Statcast data for {yday}")
+
+else:
+
+    out_path = f"{OUT}/statcast_{yday}.parquet"
+
+    df.to_parquet(out_path, index=False)
+
+    print(f"✅ Wrote {len(df)} Statcast rows for {yday} → {out_path}")
+    
+
 
 print(f"✅ wrote {len(df):,} Statcast rows for {yday}")
 

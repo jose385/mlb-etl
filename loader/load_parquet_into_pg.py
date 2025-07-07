@@ -123,7 +123,27 @@ with PG, PG.cursor() as cur:
                 
             count_strikes      INTEGER,
                 
-            pitchindex         INTEGER
+            pitchindex         INTEGER,
+                
+
+            actionindex        INTEGER,
+                
+            atbatindex         INTEGER,
+                
+            count_balls        INTEGER,
+                
+            count_strikes      INTEGER,
+                
+            inning              INTEGER,
+                
+            matchupid          INTEGER,
+                
+            batter             INTEGER,
+                
+            pitcher            INTEGER
+                
+                   
+                 
                 
                 
             -- add more columns as needed
@@ -157,7 +177,7 @@ for fp in glob.glob(f"{OUTPUT_DIR}/*.parquet"):
     df.columns = [c.replace('.', '_').replace('-', '_').lower() for c in df.columns]
 
     print("[DDL SYNC] StatsAPI columns:", df.columns.tolist())
-    
+
 
     cols = ','.join(df.columns)
 

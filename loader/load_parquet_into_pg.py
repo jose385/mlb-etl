@@ -11,6 +11,50 @@ import duckdb
 
 import psycopg2
 
+from sqlalchemy import create_engine, inspect
+
+
+# Create an SQLAlchemy engine & inspector on the same DSN you use for psycopg2
+
+engine    = create_engine(os.environ['PG_DSN'])
+
+inspector = inspect(engine)
+
+
+def sync_columns(table_schema: str, table_name: str, df_cols: list):
+
+    """
+
+    Add any df_cols missing from the Postgres table.
+
+    Defaults to TEXT for new columns.
+
+    """
+
+    existing = {c['name'] for c in inspector.get_columns(table_name, schema=table_schema)}
+
+    missing  = [c for c in df_cols if c not in existing]
+
+    if not missing:
+
+        return
+    
+    with engine.begin() as conn:
+
+        for col in missing:
+
+            conn.execute(
+
+                f"ALTER TABLE {table_schema}.{table_name} "
+
+                f"ADD COLUMN IF NOT EXISTS {col} TEXT;"
+
+            )
+
+            print(f"[DDL SYNC] Added missing column: {col}")
+
+
+
 
 # 1) Connect & prepare
 
@@ -187,6 +231,27 @@ for fp in glob.glob(f"{OUTPUT_DIR}/*.parquet"):
 
 
     cols = ','.join(df.columns)
+
+    # --- insert this block ---
+
+    df_cols = df.columns.tolist()
+
+    # pick the right table name (no schema prefix) based on filename
+
+    if 'statsapi' in fp.lower():
+
+        table_name = 'statsapi_playlog'
+
+    else:
+
+        table_name = 'statcast_pitchlog'
+
+    # auto-add any missing columns in mlb.<table_name>
+
+    sync_columns('mlb', table_name, df_cols)
+
+    # --- end insertion ---
+    
 
 
     # convert to CSV in-memory

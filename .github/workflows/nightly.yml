@@ -84,6 +84,17 @@ jobs:
 
         run: pip install -r py/requirements.txt
 
+      - name: Pull Rosters
+
+        run: python py/rosters_etl.py
+
+        env:
+
+          OUTPUT_DIR: stage
+
+          PG_DSN: ${{ secrets.PG_DSN }}
+
+
 
       - name: Pull Statcast (pybaseball)
 

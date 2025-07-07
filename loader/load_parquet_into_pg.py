@@ -130,6 +130,16 @@ with PG, PG.cursor() as cur:
                 
             atbatindex         INTEGER,
                 
+            runnerindex        INTEGER,
+                
+            runnersindex        INTEGER,
+                
+            runners             TEXT,
+                
+            playevents          TEXT,
+                
+            playendtime         TEXT,
+                
                 
             inning              INTEGER,
                 

@@ -25,3 +25,6 @@ statsmodels          # Wilson CIs & logistic models :contentReference[oaicite:7]
 
 scikit-learn         # gradient-boost sims
 
+SQLAlchemy>=2.0
+
+

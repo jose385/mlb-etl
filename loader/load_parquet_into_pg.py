@@ -14,6 +14,15 @@ import duckdb
 import psycopg2
 
 
+# loader/load_parquet_into_pg.py (add at the top with other imports)
+
+import statsapi
+
+from datetime import datetime, timedelta
+
+
+
+
 # ——— 1) Connect to Postgres with URL parsing ——————————————————————
 
 def connect():
@@ -172,11 +181,42 @@ def main():
     conn = connect()
 
     init_schema(conn)
+    
+    du = duckdb.connect()
 
-    du   = duckdb.connect()
+    OUT = os.getenv("OUTPUT_DIR", "stage")
 
-    OUT  = os.getenv("OUTPUT_DIR", "stage")
 
+    # Determine the target date for game schedule (YYYY-MM-DD)
+
+    files = glob.glob(f"{OUT}/*.parquet")
+
+    date_str = None
+
+    for f in files:
+
+        name = Path(f).name
+
+        if name.startswith("statcast_") or name.startswith("statsapi_"):
+
+            date_str = name.split("_", 1)[1].split(".")[0]
+
+            break
+
+    if not date_str and files:
+
+        name = Path(files[0]).name
+
+        if "_" in name:
+
+            date_str = name.split("_", 1)[1].split(".")[0]
+
+    if not date_str:
+
+        date_str = (datetime.today() - timedelta(days=1)).strftime("%Y-%m-%d")
+
+
+    # Loop through each Parquet file and load into the corresponding table
 
     for fp in glob.glob(f"{OUT}/*.parquet"):
 
@@ -187,16 +227,15 @@ def main():
             continue
 
 
-        # sanitize column names
+        # Sanitize column names
 
-        df.columns = [c.replace('.', '_').replace('-', '_').lower()
-                      
-                      for c in df.columns]
-        
+        df.columns = [c.replace('.', '_').replace('-', '_').lower() for c in df.columns]
+
+
         cols = ','.join(df.columns)
 
-
         name = Path(fp).name
+
 
         if name.startswith("roster_"):
 
@@ -211,10 +250,12 @@ def main():
             table = "statcast_pitchlog"
 
 
+        # Ensure the target table has all necessary columns
+
         sync_columns(conn, "mlb", table, df.columns.tolist())
 
 
-                # ── 3c) Enforce correct data types ─────────────────────────────────────────
+        # Enforce correct data types for numeric fields
 
         with conn.cursor() as cur:
 
@@ -224,23 +265,23 @@ def main():
                             
                     ALTER TABLE mlb.statcast_pitchlog
                             
-                      ALTER COLUMN game_date      TYPE DATE   USING game_date::DATE,
+                      ALTER COLUMN game_date TYPE DATE    USING game_date::DATE,
                             
-                      ALTER COLUMN game_pk        TYPE INTEGER USING game_pk::INTEGER,
+                      ALTER COLUMN game_pk   TYPE INTEGER USING game_pk::INTEGER,
                             
-                      ALTER COLUMN pitcher        TYPE INTEGER USING pitcher::INTEGER,
+                      ALTER COLUMN pitcher   TYPE INTEGER USING pitcher::INTEGER,
                             
-                      ALTER COLUMN batter         TYPE INTEGER USING batter::INTEGER,
+                      ALTER COLUMN batter    TYPE INTEGER USING batter::INTEGER,
                             
-                      ALTER COLUMN release_speed  TYPE REAL    USING release_speed::REAL,
+                      ALTER COLUMN release_speed TYPE REAL USING release_speed::REAL,
                             
-                      ALTER COLUMN release_pos_x  TYPE REAL    USING release_pos_x::REAL,
+                      ALTER COLUMN release_pos_x TYPE REAL USING release_pos_x::REAL,
                             
-                      ALTER COLUMN release_pos_z  TYPE REAL    USING release_pos_z::REAL,
+                      ALTER COLUMN release_pos_z TYPE REAL USING release_pos_z::REAL,
                             
-                      ALTER COLUMN plate_x        TYPE REAL    USING plate_x::REAL,
+                      ALTER COLUMN plate_x   TYPE REAL    USING plate_x::REAL,
                             
-                      ALTER COLUMN plate_z        TYPE REAL    USING plate_z::REAL
+                      ALTER COLUMN plate_z   TYPE REAL    USING plate_z::REAL;
                             
                 """)
 
@@ -250,22 +291,18 @@ def main():
                             
                     ALTER TABLE mlb.statsapi_playlog
                             
-                      ALTER COLUMN game_pk       TYPE INTEGER USING game_pk::INTEGER,
+                      ALTER COLUMN game_pk     TYPE INTEGER USING game_pk::INTEGER,
                             
-                      ALTER COLUMN atbat_index   TYPE INTEGER USING atbat_index::INTEGER,
+                      ALTER COLUMN atbat_index TYPE INTEGER USING atbat_index::INTEGER,
                             
-                      ALTER COLUMN pitch_index   TYPE INTEGER USING pitch_index::INTEGER
+                      ALTER COLUMN pitch_index TYPE INTEGER USING pitch_index::INTEGER;
                             
                 """)
 
         conn.commit()
 
 
-        
-
-
-
-        # stream CSV into Postgres
+        # Stream the DataFrame into Postgres using COPY
 
         buf = StringIO()
 
@@ -275,117 +312,100 @@ def main():
 
         with conn.cursor() as cur:
 
-            cur.copy_expert(
-
-                f"COPY mlb.{table} ({cols}) FROM STDIN WITH (FORMAT CSV)",
-
-                buf
-
-            )
+            cur.copy_expert(f"COPY mlb.{table} ({cols}) FROM STDIN WITH (FORMAT CSV)", buf)
 
         conn.commit()
 
 
-                # ── 3e) Upsert mlb.game metadata for today’s schedule ─────────────────
+        # If this file is a roster, upsert new teams and players for that date
 
-        with conn.cursor() as cur:
+        if table == "roster":
 
-            games = statsapi.schedule(start_date=date_str, end_date=date_str) or []
+            roster_date = name.split("_", 1)[1].split(".")[0]
 
-            for g in games:
-
-                game_pk    = g.get("game_id") or g.get("game_pk")
-
-                home_team  = g["home_id"]
-
-                away_team  = g["away_id"]
-
-                home_score = g.get("home_score", 0)
-
-                away_score = g.get("away_score", 0)
-
+            with conn.cursor() as cur:
 
                 cur.execute(
 
-                    """INSERT INTO mlb.game
+                    "INSERT INTO mlb.team (team_id) "
 
-                          (game_pk, game_date, home_team_id, away_team_id, home_score, away_score)
+                    "SELECT DISTINCT team_id FROM mlb.roster WHERE game_date = %s "
 
-                       VALUES (%s, %s, %s, %s, %s, %s)
+                    "ON CONFLICT (team_id) DO NOTHING;",
 
-                       ON CONFLICT (game_pk) DO UPDATE
-
-                         SET home_score = EXCLUDED.home_score,
-
-                             away_score = EXCLUDED.away_score;""",
-
-                    (game_pk, date_str, home_team, away_team, home_score, away_score)
+                    (roster_date,)
 
                 )
 
-        conn.commit()
+                cur.execute(
 
+                    "INSERT INTO mlb.player (player_id, full_name, position, bats, throws) "
 
+                    "SELECT DISTINCT person_id, person_fullname, primaryposition_name, batside_code, pitchhand_code "
 
-        # ── 3d) Upsert team & player dimensions ─────────────────────────────────────────
+                    "FROM mlb.roster WHERE game_date = %s "
 
-    if table == "roster":
+                    "ON CONFLICT (player_id) DO NOTHING;",
 
-        with conn.cursor() as cur:
+                    (roster_date,)
 
-            # Insert any new teams for this date
+                )
 
-            cur.execute("""
-                        
-            INSERT INTO mlb.team (team_id)
-                        
-            SELECT DISTINCT team_id
-                        
-              FROM mlb.roster
-                        
+            conn.commit()
 
-             WHERE game_date = %s
-                        
-            ON CONFLICT (team_id) DO NOTHING;
-                        
-            """, (date_str,))
-
-
-
-            # Insert any new players for this date
-
-            cur.execute("""
-                        
-            INSERT INTO mlb.player (player_id, full_name, position, bats, throws)
-                        
-            SELECT DISTINCT
-                        
-              person_id,
-                        
-              person_fullname      AS full_name,
-                        
-              primaryposition_name AS position,
-                        
-              batside_code         AS bats,
-                        
-              pitchhand_code       AS throws
-                        
-            FROM mlb.roster
-                        
-            WHERE game_date = %s
-                        
-            ON CONFLICT (player_id) DO NOTHING;
-                        
-            """, (date_str,))
-
-
-        conn.commit()
-        
+        # Log the load
 
         print(f"→ Loaded {len(df)} rows into mlb.{table}")
 
 
+    # Finally, fetch today's game schedule and upsert into mlb.game table
+
+    with conn.cursor() as cur:
+
+        try:
+
+            games = statsapi.schedule(start_date=date_str, end_date=date_str) or []
+
+        except Exception as e:
+
+            print(f"❌ Error fetching schedule for {date_str}: {e}")
+
+            games = []
+
+        for g in games:
+
+            game_pk = g.get("game_id") or g.get("game_pk")
+
+            if not game_pk:
+                
+                continue
+
+            home_id  = g.get("home_id")
+
+            away_id  = g.get("away_id")
+
+            home_score = g.get("home_score", 0)
+
+            away_score = g.get("away_score", 0)
+
+            cur.execute(
+
+                "INSERT INTO mlb.game (game_pk, game_date, home_team_id, away_team_id, home_score, away_score) "
+
+                "VALUES (%s, %s, %s, %s, %s, %s) "
+
+                "ON CONFLICT (game_pk) DO UPDATE "
+
+                "SET home_score = EXCLUDED.home_score, away_score = EXCLUDED.away_score;",
+
+                (game_pk, date_str, home_id, away_id, home_score, away_score)
+
+            )
+
+    conn.commit()
+
     conn.close()
+    
 
 
 if __name__ == "__main__":

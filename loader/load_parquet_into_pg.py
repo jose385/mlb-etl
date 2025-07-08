@@ -102,6 +102,25 @@ def init_schema(conn):
 
     );
 
+    -- Game metadata table
+
+      CREATE TABLE IF NOT EXISTS mlb.game (
+
+       game_pk      INTEGER PRIMARY KEY,
+
+       game_date    DATE      NOT NULL,
+
+        home_team_id INTEGER   NOT NULL,
+
+        away_team_id INTEGER   NOT NULL,
+
+        home_score   INTEGER   NOT NULL,
+
+        away_score   INTEGER   NOT NULL
+
+      );
+
+
     """
 
     with conn.cursor() as cur:
@@ -240,6 +259,48 @@ def main():
                 """)
 
         conn.commit()
+
+         with conn.cursor() as cur:
+
+            # Pull today's schedule once as dicts/list
+
+            games = statsapi.schedule(start_date=date_str, end_date=date_str) or []
+
+            for g in games:
+
+                # statsapi returns keys like 'game_id', 'home_id', 'away_id', 'home_score', 'away_score'
+
+                game_pk     = g.get("game_id") or g.get("game_pk")
+
+                home_team   = g["home_id"]
+
+                away_team   = g["away_id"]
+
+                home_score  = g.get("home_score", 0)
+
+                away_score  = g.get("away_score", 0)
+
+
+                cur.execute("""
+                            
+                INSERT INTO mlb.game
+                            
+                  (game_pk, game_date, home_team_id, away_team_id, home_score, away_score)
+                            
+                VALUES
+                            
+                  (%s,        %s,        %s,           %s,           %s,         %s)
+                            
+                ON CONFLICT (game_pk) DO UPDATE
+                            
+                  SET home_score = EXCLUDED.home_score,
+                            
+                      away_score = EXCLUDED.away_score;
+                            
+                """, (game_pk, date_str, home_team, away_team, home_score, away_score))
+
+        conn.commit()
+        
         
 
 

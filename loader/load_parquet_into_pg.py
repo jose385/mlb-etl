@@ -215,6 +215,61 @@ def main():
 
         conn.commit()
 
+        # ── 3d) Upsert team & player dimensions ─────────────────────────────────────────
+
+    if table == "roster":
+
+        with conn.cursor() as cur:
+
+            # Insert any new teams for this date
+
+            cur.execute("""
+                        
+            INSERT INTO mlb.team (team_id)
+                        
+            SELECT DISTINCT team_id
+                        
+              FROM mlb.roster
+                        
+
+             WHERE game_date = %s
+                        
+            ON CONFLICT (team_id) DO NOTHING;
+                        
+            """, (date_str,))
+
+
+
+            # Insert any new players for this date
+
+            cur.execute("""
+                        
+            INSERT INTO mlb.player (player_id, full_name, position, bats, throws)
+                        
+            SELECT DISTINCT
+                        
+              person_id,
+                        
+              person_fullname      AS full_name,
+                        
+              primaryposition_name AS position,
+                        
+              batside_code         AS bats,
+                        
+              pitchhand_code       AS throws
+                        
+            FROM mlb.roster
+                        
+            WHERE game_date = %s
+                        
+            ON CONFLICT (player_id) DO NOTHING;
+                        
+            """, (date_str,))
+
+
+        conn.commit()
+        
+
         print(f"→ Loaded {len(df)} rows into mlb.{table}")
 
 

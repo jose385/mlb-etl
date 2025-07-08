@@ -33,6 +33,44 @@ def main(start_date: str, end_date: str):
 
     engine = create_engine(dsn)
 
+ # Ensure team & player dims exist
+
+    with engine.begin() as conn:
+
+        conn.execute(text("""
+                          
+        CREATE SCHEMA IF NOT EXISTS mlb;
+                          
+        CREATE TABLE IF NOT EXISTS mlb.team (
+                          
+          team_id   INT PRIMARY KEY,
+                          
+          team_name TEXT,
+                          
+          abbreviation TEXT
+                          
+        );
+                          
+        """))
+
+        conn.execute(text("""
+                          
+        CREATE TABLE IF NOT EXISTS mlb.player (
+                          
+          player_id INT PRIMARY KEY,
+                          
+          full_name TEXT,
+                          
+          position  TEXT,
+                          
+          bats      TEXT,
+                          
+          throws    TEXT
+                          
+        );
+                          
+        """))
+        
 
     # Ensure target schema and table exist
 
@@ -349,4 +387,4 @@ if __name__ == "__main__":
 
 
     main(start_date, end_date)
-    
+

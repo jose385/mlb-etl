@@ -195,6 +195,55 @@ def main():
         sync_columns(conn, "mlb", table, df.columns.tolist())
 
 
+                # ── 3c) Enforce correct data types ─────────────────────────────────────────
+
+        with conn.cursor() as cur:
+
+            if table == "statcast_pitchlog":
+
+                cur.execute("""
+                            
+                    ALTER TABLE mlb.statcast_pitchlog
+                            
+                      ALTER COLUMN game_date      TYPE DATE   USING game_date::DATE,
+                            
+                      ALTER COLUMN game_pk        TYPE INTEGER USING game_pk::INTEGER,
+                            
+                      ALTER COLUMN pitcher        TYPE INTEGER USING pitcher::INTEGER,
+                            
+                      ALTER COLUMN batter         TYPE INTEGER USING batter::INTEGER,
+                            
+                      ALTER COLUMN release_speed  TYPE REAL    USING release_speed::REAL,
+                            
+                      ALTER COLUMN release_pos_x  TYPE REAL    USING release_pos_x::REAL,
+                            
+                      ALTER COLUMN release_pos_z  TYPE REAL    USING release_pos_z::REAL,
+                            
+                      ALTER COLUMN plate_x        TYPE REAL    USING plate_x::REAL,
+                            
+                      ALTER COLUMN plate_z        TYPE REAL    USING plate_z::REAL
+                            
+                """)
+
+            elif table == "statsapi_playlog":
+
+                cur.execute("""
+                            
+                    ALTER TABLE mlb.statsapi_playlog
+                            
+                      ALTER COLUMN game_pk       TYPE INTEGER USING game_pk::INTEGER,
+                            
+                      ALTER COLUMN atbat_index   TYPE INTEGER USING atbat_index::INTEGER,
+                            
+                      ALTER COLUMN pitch_index   TYPE INTEGER USING pitch_index::INTEGER
+                            
+                """)
+
+        conn.commit()
+        
+
+
+
         # stream CSV into Postgres
 
         buf = StringIO()

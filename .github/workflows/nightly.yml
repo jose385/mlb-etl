@@ -105,6 +105,17 @@ jobs:
 
         run: python py/statsapi_etl.py
 
+- name: Pull Starting Lineups
+
+  run: python py/lineup_etl.py --start_date 2021-04-01 --end_date $(date +%F)
+
+  env:
+
+    PG_DSN: ${{ secrets.PG_DSN }}
+    
+
+
+
 
       - name: Load into Postgres
 

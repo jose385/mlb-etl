@@ -6,6 +6,8 @@ duckdb
 
 requests
 
+SQLAlchemy
+
 urllib3
 
 pybaseball>=2.0.0

@@ -358,76 +358,54 @@ def main(start_date: str, end_date: str):
 
 if __name__ == "__main__":
 
+    import argparse
 
-    import pandas as pd
-
-    from datetime import datetime
-
-
-    parser = argparse.ArgumentParser(
-
-        description="ETL script for MLB starting lineups."
-
-    )
-
-    parser.add_argument(
-
-        "--start_date", "--start",
-
-        dest="start_date",
-
-        help="Season backfill start (YYYY-MM-DD). Defaults to Opening Day of last season.",
-
-        required=False
-
-    )
-
-    parser.add_argument(
-
-        "--end_date", "--end",
-
-        dest="end_date",
-
-        help="Backfill end date (YYYY-MM-DD). Defaults to today.",
-
-        required=False
-
-    )
-
-    args = parser.parse_args()
+    from datetime import datetime, timedelta
 
 
-    yesterday_dt = datetime.today() - timedelta(days=1)
+    p = argparse.ArgumentParser(description="ETL script for MLB starting lineups")
 
-    default_end = yesterday_dt.strftime("%Y-%m-%d")
+    group = p.add_mutually_exclusive_group(required=True)
+
+    group.add_argument("--season", type=int,
+                       
+                       help="Backfill exactly that MLB season (e.g. 2021)")
+    
+    group.add_argument("--start_date", "--start", dest="start_date",
+                       
+                       help="YYYY-MM-DD start of date range")
+    
+    p.add_argument("--end_date", "--end", dest="end_date",
+                   
+                   help="YYYY-MM-DD end of date range (defaults to yesterday)")
+    
+    args = p.parse_args()
 
 
-    # Determine current season year (if today is April+ it's this year, else it's last year)
+    # compute default end = yesterday
 
-    today = datetime.today()
+    yesterday = (datetime.today() - timedelta(days=1)).strftime("%Y-%m-%d")
 
-    if today.month >= 4:
 
-        current_season = today.year
+    if args.season:
+
+        year = args.season
+
+        start_date = f"{year}-04-01"
+
+
+        end_date   = args.end_date or f"{year}-10-31"  # or adjust to your season end
+
+        print(f"Backfilling lineups for season {year} → {start_date} through {end_date}")
 
     else:
 
-        current_season = today.year - 1
+        start_date = args.start_date
 
+        end_date   = args.end_date or yesterday
 
-    # Opening Day for the current season is April 1 of current_season
+        print(f"Backfilling lineups from {start_date} through {end_date}")
 
-    default_start = f"{current_season}-04-01"
-
-
-    # Apply overrides or defaults
-
-    start_date = args.start_date or default_start
-
-    end_date   = args.end_date   or default_end
-
-
-    print(f"🔄 Backfilling lineups from {start_date} through {end_date} (Season {current_season})")
 
     main(start_date, end_date)
     

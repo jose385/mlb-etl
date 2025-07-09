@@ -397,37 +397,37 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
 
-    # Compute end_date = today if not provided
+    yesterday_dt = datetime.today() - timedelta(days=1)
+
+    default_end = yesterday_dt.strftime("%Y-%m-%d")
+
+
+    # Determine current season year (if today is April+ it's this year, else it's last year)
 
     today = datetime.today()
 
-    end_date = args.end_date or today.strftime("%Y-%m-%d")
-
-
-    # Determine "this" MLB season: if we're April+ this year, else last year
-
     if today.month >= 4:
 
-        this_season = today.year
+        current_season = today.year
 
     else:
 
-        this_season = today.year - 1
-
-    last_season = this_season - 1
+        current_season = today.year - 1
 
 
-    # Default start_date = last season's April 1
+    # Opening Day for the current season is April 1 of current_season
 
-    default_start = f"{last_season}-04-01"
+    default_start = f"{current_season}-04-01"
+
+
+    # Apply overrides or defaults
 
     start_date = args.start_date or default_start
 
+    end_date   = args.end_date   or default_end
 
-    print(f"🔄 Backfilling lineups from {start_date} through {end_date} "
-          
-          f"(seasons {last_season} & {this_season})")
-    
+
+    print(f"🔄 Backfilling lineups from {start_date} through {end_date} (Season {current_season})")
+
     main(start_date, end_date)
     
-

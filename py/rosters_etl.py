@@ -8,6 +8,36 @@ import statsapi
 
 from datetime import datetime
 
+import argparse
+
+
+parser = argparse.ArgumentParser(
+
+    description="Pull yesterday’s (or --date) roster via StatsAPI"
+
+)
+
+parser.add_argument(
+
+    "--date",
+
+    help="YYYY-MM-DD; defaults to yesterday",
+
+    required=False
+
+)
+
+args = parser.parse_args()
+
+
+if args.date:
+
+    yday = args.date
+
+    # ensure season matches
+
+    season = int(yday.split("-")[0])
+    
 
 
 # 1. Setup output directory
@@ -21,6 +51,8 @@ os.makedirs(OUT, exist_ok=True)
 
 today  = pd.Timestamp.today()
 
+yesterday = today - pd.Timedelta(days=1)
+
 yday   = today.strftime("%Y-%m-%d")
 
 season = today.year
@@ -33,16 +65,22 @@ schedule = statsapi.schedule(start_date=yday, end_date=yday)
 
 rows = []
 
+seen = set()   # track (date, team_id)
+
 for game in schedule:
 
-    for team_id, side in ((game["home_id"], "home"), (game["away_id"], "away")):
+    for team_id, side in ((game["home_id"], "home"),
+                          
+                          (game["away_id"], "away")):
+        
+        if (yday, team_id) in seen:
 
-        # 4a. Call roster; statsapi.roster may return dict or list
+            continue
+
+        seen.add((yday, team_id))
+
 
         data = statsapi.roster(team_id, season=season)
-
-
-        # 4b. Extract the actual list of player records
 
         if isinstance(data, dict):
 
@@ -56,23 +94,21 @@ for game in schedule:
 
             records = []
 
-
         if not records:
 
             continue
 
 
-        # 4c. Build a DataFrame from that list
-
         roster_df = pd.DataFrame(records)
 
         roster_df["team_id"]   = team_id
 
-        roster_df["game_date"] = yday      # YYYY-MM-DD
+        roster_df["game_date"] = yday
 
-        roster_df["side"]      = side      # 'home' or 'away'
+        roster_df["side"]      = side
 
         rows.append(roster_df)
+
 
 
 # 5. Write out if any data

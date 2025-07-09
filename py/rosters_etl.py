@@ -65,14 +65,14 @@ schedule = statsapi.schedule(start_date=yday, end_date=yday)
 
 rows = []
 
-seen = set()   # track (date, team_id)
 
 for game in schedule:
 
-    for team_id, side in ((game["home_id"], "home"),
-                          
-                          (game["away_id"], "away")):
-        
+    yday = game['game_date']
+
+
+    for team_id, side in ((game["home_id"], "home"), (game["away_id"], "away")):
+
         if (yday, team_id) in seen:
 
             continue
@@ -80,7 +80,7 @@ for game in schedule:
         seen.add((yday, team_id))
 
 
-        data = statsapi.roster(team_id, season=season)
+        data = statsapi.roster(team_id=team_id, season=season)
 
         if isinstance(data, dict):
 
@@ -94,45 +94,43 @@ for game in schedule:
 
             records = []
 
+
         if not records:
 
             continue
 
 
-        roster_df = pd.DataFrame(records)
+        # Add metadata to each roster record:
 
-        roster_df["team_id"]   = team_id
+        enhanced = []
 
-        roster_df["game_date"] = yday
+        for r in records:
 
-        roster_df["side"]      = side
+            r["team_id"] = team_id
+
+            r["game_date"] = yday
+
+            r["side"] = side
+
+            enhanced.append(r)
+
+
+        roster_df = pd.DataFrame(enhanced)
 
         rows.append(roster_df)
 
 
+# After loop, write everything at once
 
-# 5. Write out if any data
+if rows:
 
-if not rows:
+    final_df = pd.concat(rows, ignore_index=True)
 
-    print(f"✅ No rosters for {yday}")
+    final_df.to_parquet(f"{out_dir}/roster_{season}.parquet", index=False)
 
-    exit(0)
+    print("✅ Roster Pull complete")
 
+else:
 
-df = pd.concat(rows, ignore_index=True)
-
-
-# 6. Sanitize column names
-
-df.columns = [c.replace(".", "_").replace("-", "_").lower() for c in df.columns]
-
-
-# 7. Save to Parquet
-
-out_path = f"{OUT}/roster_{yday}.parquet"
-
-df.to_parquet(out_path, index=False)
-
-print(f"✅ Wrote {len(df)} roster rows → {out_path}")
-
+    print("⚠️ No roster data found")
+    

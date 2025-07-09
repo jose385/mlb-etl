@@ -358,33 +358,76 @@ def main(start_date: str, end_date: str):
 
 if __name__ == "__main__":
 
-    parser = argparse.ArgumentParser(description="ETL script for MLB starting lineups.")
 
-    parser.add_argument("--start_date", "--start", dest="start_date", help="Start date (YYYY-MM-DD)", required=False)
+    import pandas as pd
 
-    parser.add_argument("--end_date", "--end", dest="end_date", help="End date (YYYY-MM-DD)", required=False)
+    from datetime import datetime
+
+
+    parser = argparse.ArgumentParser(
+
+        description="ETL script for MLB starting lineups."
+
+    )
+
+    parser.add_argument(
+
+        "--start_date", "--start",
+
+        dest="start_date",
+
+        help="Season backfill start (YYYY-MM-DD). Defaults to Opening Day of last season.",
+
+        required=False
+
+    )
+
+    parser.add_argument(
+
+        "--end_date", "--end",
+
+        dest="end_date",
+
+        help="Backfill end date (YYYY-MM-DD). Defaults to today.",
+
+        required=False
+
+    )
 
     args = parser.parse_args()
 
 
-    # Determine date range from arguments or environment variables
+    # Compute end_date = today if not provided
 
-    start_date = args.start_date or os.getenv("START_DATE")
+    today = datetime.today()
 
-    end_date = args.end_date or os.getenv("END_DATE")
-
-    # Default to yesterday if no start_date provided
-
-    if not start_date:
-
-        start_date = (pd.Timestamp.today() - pd.Timedelta(days=1)).strftime("%Y-%m-%d")
-
-    # If no end_date provided, use the start_date
-
-    if not end_date:
-
-        end_date = start_date
+    end_date = args.end_date or today.strftime("%Y-%m-%d")
 
 
+    # Determine "this" MLB season: if we're April+ this year, else last year
+
+    if today.month >= 4:
+
+        this_season = today.year
+
+    else:
+
+        this_season = today.year - 1
+
+    last_season = this_season - 1
+
+
+    # Default start_date = last season's April 1
+
+    default_start = f"{last_season}-04-01"
+
+    start_date = args.start_date or default_start
+
+
+    print(f"🔄 Backfilling lineups from {start_date} through {end_date} "
+          
+          f"(seasons {last_season} & {this_season})")
+    
     main(start_date, end_date)
+    
 

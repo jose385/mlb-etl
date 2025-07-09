@@ -138,7 +138,23 @@ def fetch_roster_for_date(date_str: str, output_dir: str):
 
             for r in records:
 
-                rows.append({**r, "team_id": team_id, "game_date": date_str, "side": side})
+                if isinstance(r, dict):
+
+                    row = dict(r)  # Copy, don't reference
+
+                    row["team_id"] = team_id
+
+                    row["game_date"] = date_str
+
+                    row["side"] = side
+
+                    rows.append(row)
+
+                else:
+
+                   print(f"Warning: Skipping non-dict row: {r}")
+
+
 
     if not rows:
 

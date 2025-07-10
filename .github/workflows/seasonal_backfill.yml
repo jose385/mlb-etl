@@ -1,39 +1,55 @@
-name: MLB Seasonal Backfill
-
-
-on:
-
-  workflow_dispatch:
-
-    inputs:
-
-      season:
-
-        description: "Season year to backfill (e.g. 2021)"
-
-        required: true
-
-        type: string
-
-
 jobs:
 
   backfill:
 
     runs-on: ubuntu-latest
 
-    timeout-minutes: 120  # Allow extra time for large backfills
+
+    services:
+
+      postgres:
+
+        image: postgres:15
+
+        env:
+
+          POSTGRES_USER: postgres
+
+          POSTGRES_PASSWORD: postgres
+
+          POSTGRES_DB: postgres
+
+        ports:
+
+          - 5432:5432
+
+        options: >-
+
+          --health-cmd pg_isready
+
+          --health-interval 10s
+
+          --health-timeout 5s
+
+          --health-retries 5
+
 
     env:
 
-      PG_DSN: ${{ secrets.PG_DSN }}
+      PG_DSN: "postgresql://postgres:postgres@localhost:5432/postgres"
 
-      OUTPUT_DIR: stage
+      POSTGRES_HOST: localhost
+
+      POSTGRES_PORT: ${{ job.services.postgres.ports[5432] }}
+
+      POSTGRES_USER: postgres
+
+      POSTGRES_PASSWORD: postgres
+
 
     steps:
 
       - uses: actions/checkout@v4
-
 
       - name: Setup Python
 
@@ -43,7 +59,6 @@ jobs:
 
           python-version: "3.12"
 
-
       - name: Install dependencies
 
         run: |
@@ -52,28 +67,21 @@ jobs:
 
           pip install -r py/requirements.txt
 
-
-      - name: Backfill Statcast, PBP & Rosters
+      - name: Backfill Statcast, PBP & Roster
 
         run: |
 
           SEASON=${{ github.event.inputs.season }}
 
-          python py/backfill.py --start "$SEASON-04-01" --end "$SEASON-10-31"
-
+          python py/backfill.py --start "$SEASON-04-01" --end "$SEASON-10-01"
 
       - name: Load Parquet into Postgres
 
-        env:
-
-          PG_DSN: ${{ secrets.PG_DSN }}
-
         run: |
 
-          sleep 10  # Give DB a moment to become ready if needed
+          sleep 10  # give postgres a moment
 
           python loader/load_parquet_into_pg.py
-
 
       - name: Backfill Lineups
 

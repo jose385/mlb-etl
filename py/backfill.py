@@ -132,7 +132,7 @@ def fetch_roster_for_date(date_str: str, output_dir: str):
 
         for team_id, side in ((g["home_id"], "home"), (g["away_id"], "away")):
 
-            data = statsapi.roster(team_id, season=season)
+            data = statsapi.roster(team_id, date=date_str)
 
             if isinstance(data, dict) and "roster" in data:
 

@@ -1,55 +1,41 @@
+name: MLB Seasonal Backfill
+
+
+on:
+
+  workflow_dispatch:
+
+    inputs:
+
+      season:
+
+        description: 'Season year to backfill (e.g. 2021)'
+
+        required: true
+
+        type: string
+
+
 jobs:
 
   backfill:
 
     runs-on: ubuntu-latest
 
-
-    services:
-
-      postgres:
-
-        image: postgres:15
-
-        env:
-
-          POSTGRES_USER: postgres
-
-          POSTGRES_PASSWORD: postgres
-
-          POSTGRES_DB: postgres
-
-        ports:
-
-          - 5432:5432
-
-        options: >-
-
-          --health-cmd pg_isready
-
-          --health-interval 10s
-
-          --health-timeout 5s
-
-          --health-retries 5
-
+    timeout-minutes: 60
 
     env:
 
-      PG_DSN: "postgresql://postgres:postgres@localhost:5432/postgres"
+      PG_DSN: ${{ secrets.PG_DSN }}
 
-      POSTGRES_HOST: localhost
-
-      POSTGRES_PORT: ${{ job.services.postgres.ports[5432] }}
-
-      POSTGRES_USER: postgres
-
-      POSTGRES_PASSWORD: postgres
+      OUTPUT_DIR: stage
 
 
     steps:
 
-      - uses: actions/checkout@v4
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
 
       - name: Setup Python
 
@@ -57,7 +43,8 @@ jobs:
 
         with:
 
-          python-version: "3.12"
+          python-version: '3.12'
+
 
       - name: Install dependencies
 
@@ -67,21 +54,24 @@ jobs:
 
           pip install -r py/requirements.txt
 
-      - name: Backfill Statcast, PBP & Roster
+
+      - name: Backfill Statcast, PBP & Rosters
 
         run: |
 
           SEASON=${{ github.event.inputs.season }}
 
-          python py/backfill.py --start "$SEASON-04-01" --end "$SEASON-10-01"
+          python py/backfill.py --start "$SEASON-04-01" --end "${SEASON}-10-31"
+
 
       - name: Load Parquet into Postgres
 
         run: |
 
-          sleep 10  # give postgres a moment
+          sleep 10
 
           python loader/load_parquet_into_pg.py
+
 
       - name: Backfill Lineups
 
@@ -90,4 +80,5 @@ jobs:
           SEASON=${{ github.event.inputs.season }}
 
           python py/lineup_etl.py --season "$SEASON"
-          
+
+

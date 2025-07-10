@@ -167,7 +167,7 @@ def fetch_roster_for_date(date_str: str, output_dir: str):
 
                 else:
 
-                   print(f"Warning: Skipping non-dict row: {r}")
+                   #print(f"Warning: Skipping non-dict row: {r}")
 
 
 

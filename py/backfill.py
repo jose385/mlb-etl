@@ -134,6 +134,8 @@ def fetch_roster_for_date(date_str: str, output_dir: str):
 
             data = statsapi.roster(team_id, date=date_str)
 
+            records = []
+
             if isinstance(data, dict) and "roster" in data:
 
                records = data["roster"]
@@ -154,7 +156,7 @@ def fetch_roster_for_date(date_str: str, output_dir: str):
 
                     row["team_id"] = team_id
 
-                    row["game_date"] = yday   # update if your game date var is different
+                    row["game_date"] = date_str   # update if your game date var is different
 
                     row["side"] = side
 

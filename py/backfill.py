@@ -138,17 +138,32 @@ def fetch_roster_for_date(date_str: str, output_dir: str):
 
             for r in records:
 
-                if isinstance(r, dict):
+                if isinstance(data, dict) and "roster" in data:
 
-                    row = dict(r)  # Copy, don't reference
+                    records = data["roster"]
 
-                    row["team_id"] = team_id
+                elif isinstance(data, list):
 
-                    row["game_date"] = date_str
+                     records = data
 
-                    row["side"] = side
+                else:
 
-                    rows.append(row)
+                    records = []
+
+
+                for r in records:
+
+                    if isinstance(r, dict):
+
+                       row = dict(r)
+
+                       row["team_id"] = team_id
+
+                       row["game_date"] = date_str
+
+                       row["side"] = side
+
+                       rows.append(row)
 
                 else:
 

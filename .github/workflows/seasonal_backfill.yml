@@ -22,20 +22,45 @@ jobs:
 
     runs-on: ubuntu-latest
 
-    timeout-minutes: 60
+    services:
+
+      postgres:
+
+        image: postgres:15
+
+        env:
+
+          POSTGRES_DB: mydb
+
+          POSTGRES_USER: postgres
+
+          POSTGRES_PASSWORD: postgres
+
+        options: >-
+
+          --health-cmd pg_isready
+
+          --health-interval 10s
+
+          --health-timeout 5s
+
+          --health-retries 5
+
+        ports:
+
+          - 5432:5432
+
 
     env:
 
-      PG_DSN: ${{ secrets.PG_DSN }}
+      PG_DSN: postgresql://postgres:postgres@postgres:5432/mydb
 
       OUTPUT_DIR: stage
 
 
     steps:
 
-      - name: Checkout repo
-        uses: actions/checkout@v4
-
+      - uses: actions/checkout@v4
 
       - name: Setup Python
 
@@ -43,8 +68,7 @@ jobs:
 
         with:
 
-          python-version: '3.12'
-
+          python-version: "3.12"
 
       - name: Install dependencies
 
@@ -59,26 +83,26 @@ jobs:
 
         run: |
 
-          SEASON=${{ github.event.inputs.season }}
-
-          python py/backfill.py --start "$SEASON-04-01" --end "${SEASON}-10-31"
+          python py/backfill.py --start 2021-04-01 --end 2021-10-03
 
 
       - name: Load Parquet into Postgres
 
-        run: |
+        run: python loader/load_parquet_into_pg.py
 
-          sleep 10
 
-          python loader/load_parquet_into_pg.py
+        env:
+
+          PG_DSN: ${{ env.PG_DSN }}
 
 
       - name: Backfill Lineups
 
         run: |
 
-          SEASON=${{ github.event.inputs.season }}
+          python py/lineup_etl.py --season 2021
 
-          python py/lineup_etl.py --season "$SEASON"
+        env:
 
-
+          PG_DSN: ${{ env.PG_DSN }}
+          

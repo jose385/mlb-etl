@@ -9,7 +9,6 @@ on:
 
       season:
 
-
         description: "Season year to backfill (e.g. 2021)"
 
         required: true
@@ -23,15 +22,13 @@ jobs:
 
     runs-on: ubuntu-latest
 
-    timeout-minutes: 60
-
+    timeout-minutes: 120  # Allow extra time for large backfills
 
     env:
 
       PG_DSN: ${{ secrets.PG_DSN }}
 
       OUTPUT_DIR: stage
-
 
     steps:
 
@@ -48,7 +45,6 @@ jobs:
 
 
       - name: Install dependencies
-
 
         run: |
 
@@ -68,7 +64,15 @@ jobs:
 
       - name: Load Parquet into Postgres
 
-        run: python loader/load_parquet_into_pg.py
+        env:
+
+          PG_DSN: ${{ secrets.PG_DSN }}
+
+        run: |
+
+          sleep 10  # Give DB a moment to become ready if needed
+
+          python loader/load_parquet_into_pg.py
 
 
       - name: Backfill Lineups

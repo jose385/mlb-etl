@@ -134,41 +134,38 @@ def fetch_roster_for_date(date_str: str, output_dir: str):
 
             data = statsapi.roster(team_id, season=season)
 
-            records = data.get("roster", data) if isinstance(data, dict) else (data or [])
+            if isinstance(data, dict) and "roster" in data:
+
+               records = data["roster"]
+
+            elif isinstance(data, list):
+
+                 records = data
+
+            else:
+
+                 records = []
 
             for r in records:
 
-                if isinstance(data, dict) and "roster" in data:
+                if isinstance(r, dict):
 
-                    records = data["roster"]
+                    row = dict(r)
 
-                elif isinstance(data, list):
+                    row["team_id"] = team_id
 
-                     records = data
+                    row["game_date"] = yday   # update if your game date var is different
 
-                else:
+                    row["side"] = side
 
-                    records = []
+                    rows.append(row)
 
 
-                for r in records:
-
-                    if isinstance(r, dict):
-
-                       row = dict(r)
-
-                       row["team_id"] = team_id
-
-                       row["game_date"] = date_str
-
-                       row["side"] = side
-
-                       rows.append(row)
 
                 else:
 
                     pass
-                
+
 
                    #print(f"Warning: Skipping non-dict row: {r}")
 

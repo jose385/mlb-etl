@@ -27,34 +27,34 @@ jobs:
 
 
     # Bring up Postgres as a service container
-    
+
     services:
 
-      postgres:
+       postgres:
 
-        image: postgres:15
+         image: postgres:15
 
-        env:
+         env:
 
-          POSTGRES_DB: mydb
+           POSTGRES_DB: mydb
 
-          POSTGRES_USER: postgres
+           POSTGRES_USER: postgres
 
-          POSTGRES_PASSWORD: postgres
+           POSTGRES_PASSWORD: postgres
 
-        ports:
+         ports:
 
-          - 5432:5432
+           - 5432:5432
 
-        options: >-
+         options: >-
 
-          --health-cmd "pg_isready -U postgres -d mydb"
+           --health-cmd "pg_isready -U postgres -d mydb"
 
-          --health-interval 10s
+           --health-interval 10s
 
-          --health-timeout 5s
+           --health-timeout 5s
 
-          --health-retries 5
+           --health-retries 5
 
 
     env:

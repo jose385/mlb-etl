@@ -1,3 +1,4 @@
+# .github/workflows/seasonal_backfill.yml
 name: MLB Seasonal Backfill
 
 
@@ -9,7 +10,7 @@ on:
 
       season:
 
-        description: "Season year to backfill (e.g. 2021)"
+        description: 'Year to backfill (e.g. 2021)'
 
         required: true
 
@@ -22,6 +23,10 @@ jobs:
 
     runs-on: ubuntu-latest
 
+    timeout-minutes: 120
+
+
+    # Bring up Postgres as a service container
     services:
 
       postgres:
@@ -29,8 +34,6 @@ jobs:
         image: postgres:15
 
         env:
-
-          # ← these belong here, _not_ in options:
 
           POSTGRES_DB: mydb
 
@@ -44,8 +47,6 @@ jobs:
 
         options: >-
 
-          # only health-check flags go here:
-
           --health-cmd "pg_isready -U postgres -d mydb"
 
           --health-interval 10s
@@ -55,35 +56,29 @@ jobs:
           --health-retries 5
 
 
-
-    timeout-minutes: 60
-
     env:
 
-      #point at the local host postgres service above
-
+      # Tell your loader where to find Postgres
       PG_DSN: postgresql://postgres:postgres@localhost:5432/mydb
 
-
       OUTPUT_DIR: stage
-
-      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-
-      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-    
 
 
     steps:
 
-      - uses: actions/checkout@v4
+      - name: Check out repo
 
-      - name: Setup Python
+        uses: actions/checkout@v4
+
+
+      - name: Set up Python
 
         uses: actions/setup-python@v5
 
         with:
 
-          python-version: "3.12"
+          python-version: '3.12'
+
 
       - name: Install dependencies
 
@@ -93,6 +88,7 @@ jobs:
 
           pip install -r py/requirements.txt
 
+
       - name: Backfill Statcast, PBP & Rosters
 
         run: |
@@ -101,13 +97,17 @@ jobs:
 
           python py/backfill.py --start "$SEASON-04-01" --end "$SEASON-10-03"
 
+
       - name: Load Parquet into Postgres
 
         run: |
 
+          # Wait a few seconds to ensure Postgres is ready
+
           sleep 10
 
           python loader/load_parquet_into_pg.py
+
 
       - name: Backfill Lineups
 
@@ -116,3 +116,4 @@ jobs:
           SEASON=${{ github.event.inputs.season }}
 
           python py/lineup_etl.py --season "$SEASON"
+          

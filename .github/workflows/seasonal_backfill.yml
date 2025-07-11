@@ -44,22 +44,15 @@ jobs:
 
         options: >-
 
-<<<<<<< HEAD
           # only health-check flags go here:
 
           --health-cmd "pg_isready -U postgres -d mydb"
-=======
-          # only health‐check flags go here:
->>>>>>> 002dff0df99b1c353bce73e10e4b44a61bcc4488
 
-           --health-cmd "pg_isready -U postgres -d mydb"
+          --health-interval 10s
 
-           --health-interval 10s
+          --health-timeout 5s
 
-           --health-timeout 5s
-
-           --health-retries 5
-
+          --health-retries 5
 
 
 

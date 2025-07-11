@@ -1,120 +1,66 @@
-# .github/workflows/seasonal_backfill.yml
 name: MLB Seasonal Backfill
 
 
 on:
-
   workflow_dispatch:
-
     inputs:
-
       season:
-
-        description: 'Year to backfill (e.g. 2021)'
-
+        description: 'Season year to backfill (e.g. 2021)'
         required: true
-
         type: string
 
 
 jobs:
-
   backfill:
-
     runs-on: ubuntu-latest
-
     timeout-minutes: 120
 
-
-    # Bring up Postgres as a service container
-
     services:
-
-       postgres:
-
-         image: postgres:15
-
-         env:
-
-           POSTGRES_DB: mydb
-
-           POSTGRES_USER: postgres
-
-           POSTGRES_PASSWORD: postgres
-
-         ports:
-
-           - 5432:5432
-
-         options: >-
-
-           --health-cmd "pg_isready -U postgres -d mydb"
-
-           --health-interval 10s
-
-           --health-timeout 5s
-
-           --health-retries 5
-
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_DB: mydb
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d mydb"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
 
     env:
-
-      # Tell your loader where to find Postgres
-      PG_DSN: postgresql://postgres:postgres@localhost:5432/mydb
-
+      PG_DSN: ${{ secrets.PG_DSN }}
       OUTPUT_DIR: stage
 
-
     steps:
+      - uses: actions/checkout@v4
 
-      - name: Check out repo
-
-        uses: actions/checkout@v4
-
-
-      - name: Set up Python
-
+      - name: Setup Python
         uses: actions/setup-python@v5
-
         with:
-
           python-version: '3.12'
 
-
       - name: Install dependencies
-
         run: |
-
           python -m pip install --upgrade pip
-
           pip install -r py/requirements.txt
 
-
       - name: Backfill Statcast, PBP & Rosters
-
         run: |
-
           SEASON=${{ github.event.inputs.season }}
-
           python py/backfill.py --start "$SEASON-04-01" --end "$SEASON-10-03"
 
-
       - name: Load Parquet into Postgres
-
         run: |
-
-          # Wait a few seconds to ensure Postgres is ready
-
-          sleep 10
-
           python loader/load_parquet_into_pg.py
 
-
       - name: Backfill Lineups
-
         run: |
-
           SEASON=${{ github.event.inputs.season }}
-
           python py/lineup_etl.py --season "$SEASON"
+
+
+
 

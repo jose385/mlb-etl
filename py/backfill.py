@@ -128,7 +128,24 @@ def fetch_statsapi_for_date(date_str: str, output_dir: str):
     print(f"✅ StatsAPI: Wrote {len(df)} rows → {out_file}")
 
 
+# ─── at the top of backfill.py, alongside your other imports ───
+import statsapi
+import pandas as pd
+from datetime import datetime, timedelta
+import os, argparse
+from pybaseball import statcast
+
+# ─── Replace your old fetch_roster_for_date entirely with this: ───
+
 def fetch_roster_for_date(date_str: str, output_dir: str):
+
+    """
+
+    Fetch one day's rosters (home & away) via the team_roster endpoint
+
+    and write to Parquet if new.
+
+    """
 
     out_file = os.path.join(output_dir, f"roster_{date_str}.parquet")
 
@@ -138,20 +155,24 @@ def fetch_roster_for_date(date_str: str, output_dir: str):
 
         return
     
+
+    # get all games on that date
+
     games = statsapi.schedule(start_date=date_str, end_date=date_str) or []
 
     rows = []
+
 
     for g in games:
 
         for team_id, side in ((g["home_id"], "home"), (g["away_id"], "away")):
 
-            # Robust: Use team_roster endpoint for best format and coverage
             try:
 
-                data = statsapi.get("team_roster", {"teamId": team_id, "date": date_str})
+                # use the stable team_roster endpoint rather than statsapi.roster()
+                resp = statsapi.get("team_roster", {"teamId": team_id, "date": date_str})
 
-                records = data.get("roster", []) if data else []
+                roster = resp.get("roster", [])
 
             except Exception as e:
 
@@ -159,31 +180,35 @@ def fetch_roster_for_date(date_str: str, output_dir: str):
 
                 continue
 
-            for player in records:
+
+            for p in roster:
+
+                # normalize each player record
 
                 row = {
 
-                    "team_id": team_id,
+                    "team_id":             team_id,
 
-                    "game_date": date_str,
+                    "game_date":           date_str,
 
-                    "side": side,
+                    "side":                side,
 
-                    "person_id": player["person"]["id"],
+                    "person_id":           p["person"]["id"],
 
-                    "person_fullname": player["person"]["fullName"],
+                    "person_fullname":     p["person"]["fullName"],
 
-                    "primaryposition_name": player["position"]["abbreviation"],
+                    "primaryposition_name":p["position"]["abbreviation"],
 
-                    "batside_code": player.get("batSide", {}).get("code"),
+                    "batside_code":        p.get("batSide", {}).get("code"),
 
-                    "pitchhand_code": player.get("pitchHand", {}).get("code"),
+                    "pitchhand_code":      p.get("pitchHand", {}).get("code"),
 
-                    "status": player.get("status", {}).get("code")
+                    "status":              p.get("status", {}).get("code")
 
                 }
 
                 rows.append(row)
+
 
     if not rows:
 
@@ -191,7 +216,10 @@ def fetch_roster_for_date(date_str: str, output_dir: str):
 
         return
     
+
     df = pd.DataFrame(rows)
+
+    # clean up column names
 
     df.columns = [c.replace(".", "_").replace("-", "_").lower() for c in df.columns]
 
@@ -200,19 +228,24 @@ def fetch_roster_for_date(date_str: str, output_dir: str):
     print(f"✅ Rosters: Wrote {len(df)} rows → {out_file}")
 
 
+
+# ─── In your main() function, make sure you call it _after_ StatsAPI and Statcast ───
+
 def main():
 
     p = argparse.ArgumentParser()
 
     p.add_argument("--start", help="YYYY-MM-DD (default=2021-04-01)", required=False)
 
-    p.add_argument("--end",   help="YYYY-MM-DD (default=today)", required=False)
+    p.add_argument("--end",   help="YYYY-MM-DD (default=today)",       required=False)
 
     args = p.parse_args()
 
+
     start = args.start or "2021-04-01"
 
-    end   = args.end or datetime.today().strftime("%Y-%m-%d")
+    end   = args.end   or datetime.today().strftime("%Y-%m-%d")
+    
 
     sd = datetime.fromisoformat(start)
 
@@ -222,11 +255,13 @@ def main():
 
         raise ValueError("End date must be on or after start date")
     
+
     out_dir = os.getenv("OUTPUT_DIR", "stage")
 
     os.makedirs(out_dir, exist_ok=True)
 
     print(f"🔄 Backfilling from {sd.date()} to {ed.date()}…")
+
 
     cur = sd
 
@@ -234,15 +269,21 @@ def main():
 
         ds = cur.strftime("%Y-%m-%d")
 
+
         fetch_statcast_for_date(ds, out_dir)
 
         fetch_statsapi_for_date(ds, out_dir)
 
         fetch_roster_for_date(ds, out_dir)
+            # ← this line plugs in your improved roster logic
+
 
         cur += timedelta(days=1)
 
+
     print("🎉 Backfill complete.")
+    
+
 
 
 if __name__ == "__main__":

@@ -9,7 +9,7 @@ on:
 
       season:
 
-        description: 'Season year to backfill (e.g. 2021)'
+        description: "Season year to backfill (e.g. 2021)"
 
         required: true
 
@@ -24,51 +24,22 @@ jobs:
 
     timeout-minutes: 60
 
-   services:
+    env:
+
+      PG_DSN: ${{ secrets.PG_DSN }}
+
+      OUTPUT_DIR: stage
+
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+    
 
 
-     postgres:
-
-       image: postgres:16-alpine
-
-       env:
-
-         POSTGRES_USER: ghactions
-
-         POSTGRES_PASSWORD: secret
-
-         POSTGRES_DB: mlb
-
-       ports:
-
-         - 5432:5432
-
-       options: >-
-
-        --health-cmd pg_isready
-
-        --health-interval 10s
-
-        --health-timeout 5s
-
-        --health-retries 5
-        
-
-   env:
-
-  # Use the service hostname 'postgres' instead of localhost
-     PG_DSN: postgresql://ghactions:secret@postgres:5432/mlb
-
-     OUTPUT_DIR: stage
-
-     AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-
-     AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-  
-
-   steps:
+    steps:
 
       - uses: actions/checkout@v4
+
 
       - name: Setup Python
 
@@ -78,39 +49,38 @@ jobs:
 
           python-version: "3.12"
 
+
       - name: Install dependencies
 
         run: |
 
           python -m pip install --upgrade pip
 
-          pip install -r py/requirements.txt
-
+          pip install -r py/requirements.txt'
 
       - name: Backfill Statcast, PBP & Rosters
 
         run: |
 
-          python py/backfill.py --start 2021-04-01 --end 2021-10-03
+          SEASON=${{ github.event.inputs.season }}
+
+          python py/backfill.py --start "$SEASON-04-01" --end "$SEASON-10-03"
 
 
       - name: Load Parquet into Postgres
 
-        run: python loader/load_parquet_into_pg.py
+        run: |
 
+          sleep 10
 
-        env:
-
-          PG_DSN: ${{ env.PG_DSN }}
+          python loader/load_parquet_into_pg.py
 
 
       - name: Backfill Lineups
 
         run: |
 
-          python py/lineup_etl.py --season 2021
+          SEASON=${{ github.event.inputs.season }}
 
-        env:
-
-          PG_DSN: ${{ env.PG_DSN }}
-
+          python py/lineup_etl.py --season "$SEASON"
+          

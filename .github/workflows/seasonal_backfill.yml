@@ -26,29 +26,34 @@ jobs:
 
       postgres:
 
-        image: postgres:15
+        image: posters:15
 
         env:
 
-           POSTGRES_DB: mydb
+          # ← these belong here, _not_ in options:
 
-           POSTGRES_USER: postgres
+          POSTGRES_DB: mydb
 
-           POSTGRES_PASSWORD: postgres
+          POSTGRES_USER: postgres
+
+          POSTGRES_PASSWORD: postgres
 
         ports:
 
-           - 5432:5432
+          - 5432:5432
 
         options: >-
 
-          --health-cmd pg_isready
+          # only health‐check flags go here:
 
-          --health-interval 10s
+           --health-cmd "pg_isready -U postgres -d mydb"
 
-          --health-timeout 5s
+           --health-interval 10s
 
-          --health-retries 5
+           --health-timeout 5s
+
+           --health-retries 5
+
 
 
     timeout-minutes: 60

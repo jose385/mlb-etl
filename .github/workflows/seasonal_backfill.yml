@@ -30,25 +30,30 @@ jobs:
 
         env:
 
-           POSTGRES_DB: mydb
+          # ← these belong here, _not_ in options:
 
-           POSTGRES_USER: postgres
+          POSTGRES_DB: mydb
 
-           POSTGRES_PASSWORD: postgres
+          POSTGRES_USER: postgres
+
+          POSTGRES_PASSWORD: postgres
 
         ports:
 
-           - 5432:5432
+          - 5432:5432
 
         options: >-
 
-          --health-cmd pg_isready
+          # only health-check flags go here:
+
+          --health-cmd "pg_isready -U postgres -d mydb"
 
           --health-interval 10s
 
           --health-timeout 5s
 
           --health-retries 5
+
 
 
     timeout-minutes: 60

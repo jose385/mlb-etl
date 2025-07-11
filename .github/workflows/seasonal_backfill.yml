@@ -26,7 +26,7 @@ jobs:
 
       postgres:
 
-        image: posters:15
+        image: postgres:15
 
         env:
 

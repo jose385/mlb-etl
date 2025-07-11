@@ -1,13 +1,23 @@
 #!/usr/bin/env python
-
 """
-backfill.py - Historical backfill for MLB Statcast, StatsAPI PBP, and Rosters.
+
+backfill.py - Robust Historical Backfill for MLB Statcast, StatsAPI PBP, and Rosters.
+
 
 Pulls data from Opening Day 2021 (or a custom start) through today (or a custom end),
 
 skips any dates already present in the `stage/` folder, and writes new Parquet files
 
 for statcast_YYYY-MM-DD.parquet, statsapi_YYYY-MM-DD.parquet, and roster_YYYY-MM-DD.parquet.
+
+
+Includes:
+
+- Robust error handling and fallback for all data pulls
+
+- Strong roster fetch logic (using the correct team_roster endpoint)
+
+- Clean column handling
 
 """
 
@@ -16,8 +26,8 @@ import os
 
 import argparse
 
-from datetime import datetime, timedelta
 
+from datetime import datetime, timedelta
 
 import pandas as pd
 
@@ -28,8 +38,6 @@ import statsapi
 
 def fetch_statcast_for_date(date_str: str, output_dir: str):
 
-    """Fetch one day's Statcast data and write to Parquet if new."""
-
     out_file = os.path.join(output_dir, f"statcast_{date_str}.parquet")
 
     if os.path.exists(out_file):
@@ -38,8 +46,16 @@ def fetch_statcast_for_date(date_str: str, output_dir: str):
 
         return
     
-    df = statcast(start_dt=date_str, end_dt=date_str)
+    try:
 
+        df = statcast(start_dt=date_str, end_dt=date_str)
+
+    except Exception as e:
+
+        print(f"❌ Statcast error for {date_str}: {e}")
+
+        return
+    
     if df is None or df.empty:
 
         print(f"✅ No Statcast data for {date_str}")
@@ -53,8 +69,6 @@ def fetch_statcast_for_date(date_str: str, output_dir: str):
 
 def fetch_statsapi_for_date(date_str: str, output_dir: str):
 
-    """Fetch one day's play-by-play via StatsAPI and write to Parquet if new."""
-
     out_file = os.path.join(output_dir, f"statsapi_{date_str}.parquet")
 
     if os.path.exists(out_file):
@@ -63,8 +77,6 @@ def fetch_statsapi_for_date(date_str: str, output_dir: str):
 
         return
     
-    # get today's games
-
     games = statsapi.schedule(start_date=date_str, end_date=date_str) or []
 
     rows = []
@@ -95,7 +107,13 @@ def fetch_statsapi_for_date(date_str: str, output_dir: str):
 
         )
 
-        rows.extend(plays)
+        if isinstance(plays, list):
+
+            rows.extend(plays)
+
+        else:
+
+            print(f"⚠️ Warning: PBP for game {game_pk} on {date_str} is not a list, skipping.")
 
     if not rows:
 
@@ -112,8 +130,6 @@ def fetch_statsapi_for_date(date_str: str, output_dir: str):
 
 def fetch_roster_for_date(date_str: str, output_dir: str):
 
-    """Fetch one day's rosters (home & away) and write to Parquet if new."""
-
     out_file = os.path.join(output_dir, f"roster_{date_str}.parquet")
 
     if os.path.exists(out_file):
@@ -126,52 +142,48 @@ def fetch_roster_for_date(date_str: str, output_dir: str):
 
     rows = []
 
-    season = datetime.fromisoformat(date_str).year
-
     for g in games:
 
         for team_id, side in ((g["home_id"], "home"), (g["away_id"], "away")):
 
-            data = statsapi.roster(team_id, date=date_str)
+            # Robust: Use team_roster endpoint for best format and coverage
+            try:
 
-            records = []
+                data = statsapi.get("team_roster", {"teamId": team_id, "date": date_str})
 
-            if isinstance(data, dict) and "roster" in data:
+                records = data.get("roster", []) if data else []
 
-               records = data["roster"]
+            except Exception as e:
 
-            elif isinstance(data, list):
+                print(f"❌ Roster error for team {team_id} on {date_str}: {e}")
 
-                 records = data
+                continue
 
-            else:
+            for player in records:
 
-                 records = []
+                row = {
 
-            for r in records:
+                    "team_id": team_id,
 
-                if isinstance(r, dict):
+                    "game_date": date_str,
 
-                    row = dict(r)
+                    "side": side,
 
-                    row["team_id"] = team_id
+                    "person_id": player["person"]["id"],
 
-                    row["game_date"] = date_str   # update if your game date var is different
+                    "person_fullname": player["person"]["fullName"],
 
-                    row["side"] = side
+                    "primaryposition_name": player["position"]["abbreviation"],
 
-                    rows.append(row)
+                    "batside_code": player.get("batSide", {}).get("code"),
 
+                    "pitchhand_code": player.get("pitchHand", {}).get("code"),
 
+                    "status": player.get("status", {}).get("code")
 
-                else:
+                }
 
-                    pass
-
-
-                   #print(f"Warning: Skipping non-dict row: {r}")
-
-
+                rows.append(row)
 
     if not rows:
 
@@ -198,7 +210,6 @@ def main():
 
     args = p.parse_args()
 
-
     start = args.start or "2021-04-01"
 
     end   = args.end or datetime.today().strftime("%Y-%m-%d")
@@ -211,13 +222,11 @@ def main():
 
         raise ValueError("End date must be on or after start date")
     
-
     out_dir = os.getenv("OUTPUT_DIR", "stage")
 
     os.makedirs(out_dir, exist_ok=True)
 
     print(f"🔄 Backfilling from {sd.date()} to {ed.date()}…")
-
 
     cur = sd
 
@@ -233,7 +242,6 @@ def main():
 
         cur += timedelta(days=1)
 
-
     print("🎉 Backfill complete.")
 
 
@@ -241,4 +249,5 @@ if __name__ == "__main__":
 
     main()
     
+
 

@@ -27,6 +27,7 @@ jobs:
 
 
     # Bring up Postgres as a service container
+    
     services:
 
       postgres:
@@ -116,4 +117,4 @@ jobs:
           SEASON=${{ github.event.inputs.season }}
 
           python py/lineup_etl.py --season "$SEASON"
-          
+

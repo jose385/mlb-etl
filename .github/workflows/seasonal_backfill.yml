@@ -24,50 +24,49 @@ jobs:
 
     timeout-minutes: 60
 
-
    services:
 
 
-  postgres:
+     postgres:
 
-    image: postgres:16-alpine
+       image: postgres:16-alpine
 
-    env:
+       env:
 
-      POSTGRES_USER: ghactions
+         POSTGRES_USER: ghactions
 
-      POSTGRES_PASSWORD: secret
+         POSTGRES_PASSWORD: secret
 
-      POSTGRES_DB: mlb
+         POSTGRES_DB: mlb
 
-    ports:
+       ports:
 
-      - 5432:5432
+         - 5432:5432
 
-    options: >-
+       options: >-
 
-      --health-cmd pg_isready
+        --health-cmd pg_isready
 
-      --health-interval 10s
+        --health-interval 10s
 
-      --health-timeout 5s
+        --health-timeout 5s
 
-      --health-retries 5
+        --health-retries 5
+        
 
-
-env:
+   env:
 
   # Use the service hostname 'postgres' instead of localhost
-  PG_DSN: postgresql://ghactions:secret@postgres:5432/mlb
+     PG_DSN: postgresql://ghactions:secret@postgres:5432/mlb
 
-  OUTPUT_DIR: stage
+     OUTPUT_DIR: stage
 
-  AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+     AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
 
-  AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+     AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
   
 
-    steps:
+   steps:
 
       - uses: actions/checkout@v4
 

@@ -231,6 +231,18 @@ def main():
 
         df.columns = [c.replace('.', '_').replace('-', '_').lower() for c in df.columns]
 
+            # ─── FIX: ensure roster parquet has a player_id column ────────────────────
+
+        if name.startswith("roster_"):
+
+        # rename the imported "person_id" to "player_id" so the COPY matches the table
+
+           if "person_id" in df.columns:
+
+               df = df.rename(columns={"person_id": "player_id"})
+
+
+
 
         cols = ','.join(df.columns)
 

@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 
+
 import os
 
 import pandas as pd
@@ -40,16 +41,9 @@ if args.date:
 
 else:
 
-    # default to yesterday
-
     yday_dt = datetime.utcnow().date() - timedelta(days=1)
 
     yday = yday_dt.isoformat()
-
-
-# derive season from date
-
-season = int(yday.split("-")[0])
 
 
 # 2. Setup output directory
@@ -59,25 +53,17 @@ OUT = os.getenv("OUTPUT_DIR", "stage")
 os.makedirs(OUT, exist_ok=True)
 
 
-# 3. Initialize seen set to avoid duplicate team pulls
-
-seen = set()
+# 3. Initialize "seen" set to avoid duplicate team pulls and container for rows\seen = set()
 
 rows = []
 
 
-# 4. Fetch schedule for the target date
-
-schedule = statsapi.schedule(start_date=yday, end_date=yday) or []
+# 4. Fetch schedule for the target date\schedule = statsapi.schedule(start_date=yday, end_date=yday) or []
 
 
 for game in schedule:
 
-    # game_date may come as string or timestamp; use our yday
-
     for team_id, side in ((game.get("home_id"), "home"), (game.get("away_id"), "away")):
-
-        # skip if this team-date already processed
 
         if (yday, team_id) in seen:
 
@@ -99,7 +85,7 @@ for game in schedule:
             continue
 
 
-        # normalize payload
+        # 6. Normalize payload
 
         if isinstance(data, dict) and "roster" in data:
 
@@ -119,7 +105,7 @@ for game in schedule:
             continue
 
 
-        # 6. Build DataFrame
+        # 7. Build enriched DataFrame rows
 
         enriched = []
 
@@ -129,15 +115,15 @@ for game in schedule:
 
                 continue
 
-            r_copy = r.copy()
+            row = r.copy()
 
-            r_copy["team_id"] = team_id
+            row["team_id"] = team_id
 
-            r_copy["game_date"] = yday
+            row["game_date"] = yday
 
-            r_copy["side"] = side
+            row["side"] = side
 
-            enriched.append(r_copy)
+            enriched.append(row)
 
 
         if enriched:
@@ -147,7 +133,7 @@ for game in schedule:
             rows.append(df)
 
 
-# 7. Write output
+# 8. Write output
 
 if rows:
 
@@ -166,4 +152,5 @@ if rows:
 else:
 
     print(f"⚠️ No Rosters for {yday}")
+
     

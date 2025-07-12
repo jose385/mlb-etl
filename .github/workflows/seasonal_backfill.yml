@@ -56,10 +56,10 @@ jobs:
 
         env:
 
-          PG_DSN: ${{ secrets.PG_DSN }}
+          PG_DSN: postgres://postgres:postgres@localhost:5432/mydb
+          
 
         run: |
-        
 
           psql "$PG_DSN" \
 

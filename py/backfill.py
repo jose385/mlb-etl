@@ -13,7 +13,10 @@ import argparse
 from datetime import datetime, timedelta
 
 import pandas as pd
-from pybaseball import statcast
+try:
+    from pybaseball import statcast
+except ImportError:
+    raise ImportError("pybaseball is required. Install via pip install pybaseball>=2.0.0")    
 import statsapi
 
 def fetch_statcast_for_date(date_str: str, output_dir: str):

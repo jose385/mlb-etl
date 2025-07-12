@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+han#!/usr/bin/env python
 
 import os
 import sys
@@ -43,17 +43,15 @@ def load_table(conn, parquet_pattern, table):
         print(f"✅ Loaded {len(df)} rows into mlb.{table}")
 
 def main():
-    conn = None
-    try:
-        conn = connect()
-        # load dimensions first
-        load_table(conn, "stage/roster_*.parquet", "roster")
-        load_table(conn, "stage/statsapi_*.parquet", "statsapi_playlog")
-        load_table(conn, "stage/statcast_*.parquet", "statcast_eventlog")
-        load_table(conn, "stage/statcast_*.parquet", "statcast_pitchlog")
-    finally:
-        if conn:
-            conn.close()
+    conn = psycopg2.connect(os.getenv("PG_DSN"))
+    cur = conn.cursor()
+    for fn in glob.glob("stage/*.parquet"):
+        table = os.path.basename(fn).split('_')[0]  # e.g. statcast, statsapi, roster
+        df = pd.read_parquet(fn)
+        buf = df.to_csv(index=False, header=False)
+        cur.copy_expert(f"COPY mlb.{table} FROM STDIN WITH (FORMAT CSV)", io.StringIO(buf))
+        conn.commit()
+        print(f"→ Loaded {len(df)} rows into mlb.{table}")
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()

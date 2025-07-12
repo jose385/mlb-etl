@@ -52,16 +52,25 @@ jobs:
           SEASON=${{ github.event.inputs.season }}
           python py/backfill.py --start "$SEASON-04-01" --end "$SEASON-10-03"
 
-      - name: Apply roster-player_id NULL migration
+      - name: Apply roster player_id NULL migration
+
+        env:
+
+          PG_DSN: ${{ secrets.PG_DSN }}
 
         run: |
-
-          echo "Running roster DDL to allow nullable player_id…"
+        
 
           psql "$PG_DSN" \
 
-            -f loader/migrations/002_drop_roster_player_id_not_null.sql
-            
+            --echo-all \
+
+            --set ON_ERROR_STOP=1 \
+
+            -f migrations/roster_player_id_null.sql
+
+
+
 
 
       - name: Load Parquet into Postgres

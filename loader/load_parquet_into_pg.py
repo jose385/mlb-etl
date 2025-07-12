@@ -1,57 +1,46 @@
-#!/usr/bin/env python
-
 import os
-import sys
-import glob
-import pandas as pd
+import io
+import argparse
 import psycopg2
-from psycopg2 import sql
-from io import StringIO
+from psycopg2.extras import execute_values
+import pandas as pd
+
 
 def connect():
     dsn = os.getenv("PG_DSN")
     if not dsn:
-        print("❌ ERROR: PG_DSN environment variable is not set")
-        sys.exit(1)
+        raise RuntimeError("PG_DSN environment variable is not set")
     return psycopg2.connect(dsn)
 
-def load_table(conn, parquet_pattern, table):
-    files = sorted(glob.glob(parquet_pattern))
-    if not files:
-        print(f"⚠️  No files found for pattern {parquet_pattern}")
-        return
 
-    for path in files:
-        df = pd.read_parquet(path)
-        if df.empty:
-            continue
+def load_table(conn, table: str, df: pd.DataFrame):
+    # Prepare columns and CSV buffer
+    cols = ", ".join(df.columns)
+    buf = io.StringIO()
+    df.to_csv(buf, index=False, header=False)
+    buf.seek(0)
 
-        # reorder columns to match table
-        cols = list(df.columns)
-        buf = StringIO()
-        df.to_csv(buf, index=False, header=False)
-        buf.seek(0)
+    with conn.cursor() as cur:
+        cur.copy_expert(f"COPY mlb.{table} ({cols}) FROM STDIN WITH (FORMAT CSV)", buf)
+    conn.commit()
+    print(f"✅ Loaded {len(df)} rows into mlb.{table}")
 
-        with conn.cursor() as cur:
-            cur.copy_expert(
-                sql.SQL("COPY mlb.{} ({}) FROM STDIN WITH (FORMAT CSV)").format(
-                    sql.Identifier(table),
-                    sql.SQL(',').join(map(sql.Identifier, cols))
-                ), buf
-            )
-            conn.commit()
-        print(f"✅ Loaded {len(df)} rows into mlb.{table}")
 
 def main():
-    conn = psycopg2.connect(os.getenv("PG_DSN"))
-    cur = conn.cursor()
-    for fn in glob.glob("stage/*.parquet"):
-        table = os.path.basename(fn).split('_')[0]  # e.g. statcast, statsapi, roster
-        df = pd.read_parquet(fn)
-        buf = df.to_csv(index=False, header=False)
-        cur.copy_expert(f"COPY mlb.{table} FROM STDIN WITH (FORMAT CSV)", io.StringIO(buf))
-        conn.commit()
-        print(f"→ Loaded {len(df)} rows into mlb.{table}")
+    parser = argparse.ArgumentParser(description="Load all stage/*.parquet files into Postgres")
+    parser.add_argument('--dir', default='stage', help='Directory containing parquet files')
+    args = parser.parse_args()
+
+    conn = connect()
+    files = sorted(os.listdir(args.dir))
+    for fname in files:
+        if not fname.endswith('.parquet'):
+            continue
+        path = os.path.join(args.dir, fname)
+        table = fname.split('_')[0]  # statcast, statsapi, roster, lineup, etc.
+        print(f"▶ Loading {fname} into table '{table}'...")
+        df = pd.read_parquet(path)
+        load_table(conn, table, df)
 
 if __name__ == '__main__':
     main()

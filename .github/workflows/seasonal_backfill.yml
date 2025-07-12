@@ -52,20 +52,19 @@ jobs:
           SEASON=${{ github.event.inputs.season }}
           python py/backfill.py --start "$SEASON-04-01" --end "$SEASON-10-03"
 
-      - name: Apply roster player_id NULL migration
-
+      - name: Test roster_player_id NULL migration (dry-run)
         env:
-
-          PG_DSN: ${{ env.PG_DSN }}
-          
-          
-
+          PGPASSWORD: ${{ secrets.PG_PASSWORD }}
+          PG_DSN:     ${{ secrets.PG_DSN }}
         run: |
+          set -eo pipefail
+          PSQL="psql \"$PG_DSN\" --echo-all --set ON_ERROR_STOP=on"
+          $PSQL <<'EOF'
+          BEGIN;
+          \ir migrations/roster_player_id_null.sql
+          ROLLBACK;
+          EOF
 
-          psql "$PG_DSN" \
-            --echo-all \
-            --set ON_ERROR_STOP=1 \
-            -f migrations/roster_player_id_null.sql
 
 
 

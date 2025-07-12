@@ -29,7 +29,7 @@ jobs:
           --health-retries 5
 
     env:
-      PG_DSN: ${{ job.services.postgres.connection }}
+      PG_DSN: postgres://ghactions:secret@localhost:5432/mlb
       OUTPUT_DIR: stage
 
     steps:

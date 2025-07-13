@@ -58,7 +58,7 @@ jobs:
       - name: Backfill Statcast, PBP & Rosters
         run: |
           START="${{ github.event.inputs.season }}-04-01"
-          END="${{ github.event.inputs.season }}-10-03"
+          END="${{ github.event.inputs.season }}-05-03"
           # if monthly input is "true", include --monthly
           MONTHLY_FLAG=""
           if [ "${{ github.event.inputs.monthly }}" = "true" ]; then

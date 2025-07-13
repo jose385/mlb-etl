@@ -54,59 +54,93 @@ def fetch_statsapi_for_date(date_str, output_dir):
         pd.json_normalize(rows).to_parquet(out, index=False)
         print(f"✅ PBP: Wrote {len(rows)} → {out}")
 
-def fetch_roster_for_date(date_str, output_dir):
-    out = os.path.join(output_dir, f"roster_{date_str}.parquet")
-    if os.path.exists(out):
-        print(f"⏭️ Skipping Rosters for {date_str}")
+def fetch_roster_for_date(date_str: str, output_dir: str):
+    """Fetch one day's rosters (home & away) and write to Parquet if new."""
+    out_file = os.path.join(output_dir, f"roster_{date_str}.parquet")
+    if os.path.exists(out_file):
+        print(f"⏭️ Skipping Rosters for {date_str} (already exists)")
         return
+
     games = statsapi.schedule(start_date=date_str, end_date=date_str) or []
     rows = []
+    season = datetime.fromisoformat(date_str).year
+
     for g in games:
         for team_id, side in ((g["home_id"], "home"), (g["away_id"], "away")):
-            data = statsapi.roster(team_id, date=date_str)
-            recs = data.get("roster") if isinstance(data, dict) else (data if isinstance(data, list) else [])
-            for r in recs:
-                if isinstance(r, dict):
-                    r2 = dict(r)
-                    r2.update(team_id=team_id, game_date=date_str, side=side)
-                    rows.append(r2)
+            # NEW: use the `team_roster` endpoint
+            try:
+                resp = statsapi.get("team_roster", {"teamId": team_id, "season": season})
+            except Exception as e:
+                print(f"❌ Roster error for team {team_id} on {date_str}: {e}")
+                continue
+
+            # the API returns a dict with {"roster": [...]} 
+            records = resp.get("roster", [])
+
+            for r in records:
+                row = dict(r)
+                row["team_id"]   = team_id
+                row["game_date"] = date_str
+                row["side"]      = side
+                rows.append(row)
+
     if not rows:
         print(f"✅ No Rosters for {date_str}")
-    else:
-        df = pd.DataFrame(rows)
-        df.columns = [c.replace(".", "_").replace("-", "_").lower() for c in df.columns]
-        df.to_parquet(out, index=False)
-        print(f"✅ Rosters: Wrote {len(df)} → {out}")
-
-def fetch_lineup_for_date(date_str, output_dir):
-    out = os.path.join(output_dir, f"lineup_{date_str}.parquet")
-    if os.path.exists(out):
-        print(f"⏭️ Skipping Lineup for {date_str}")
         return
+
+    df = pd.DataFrame(rows)
+    df.columns = [c.replace(".", "_").replace("-", "_").lower() for c in df.columns]
+    df.to_parquet(out_file, index=False)
+    print(f"✅ Rosters: Wrote {len(df)} rows → {out_file}")
+
+
+def fetch_lineup_for_date(date_str: str, output_dir: str):
+    """Fetch one day's starting lineups (home & away) and write to Parquet if new."""
+    out_file = os.path.join(output_dir, f"lineup_{date_str}.parquet")
+    if os.path.exists(out_file):
+        print(f"⏭️ Skipping Lineups for {date_str} (already exists)")
+        return
+
     games = statsapi.schedule(start_date=date_str, end_date=date_str) or []
     rows = []
+
     for g in games:
-        pk = g.get("game_pk") or g.get("game_id")
-        if not pk:
+        game_pk = g.get("game_id") or g.get("game_pk")
+        if not game_pk:
             continue
+
         try:
-            data = statsapi.get("game_liveFeed", {"gamePk": pk})
-            # sometimes liveData missing until after first pitch
-            live = data.get("liveData", {})
-            home = live.get("boxscore", {}).get("teams", {}).get("home", {}).get("batters", [])
-            away = live.get("boxscore", {}).get("teams", {}).get("away", {}).get("batters", [])
-            for side, batters in (("home", home), ("away", away)):
-                for pos, pid in enumerate(batters, 1):
-                    rows.append({"game_pk": pk, "game_date": date_str,
-                                 "team_side": side, "bat_order": pos, "player_id": pid})
+            # NEW: use the `boxscore` endpoint and drill into liveData.boxscore.teams[…].batters
+            resp = statsapi.get("boxscore", {"gamePk": game_pk})
+            teams = resp["liveData"]["boxscore"]["teams"]
         except Exception as e:
-            print(f"❌ Lineup error for {pk}@{date_str}: {e}")
+            print(f"❌ Lineup error for game {game_pk} on {date_str}: {e}")
+            continue
+
+        for side in ("home", "away"):
+            batters = teams[side]["batters"]
+            for bat_id in batters:
+                info = teams[side]["players"][f"ID{bat_id}"]
+                row = {
+                    "game_pk":     game_pk,
+                    "game_date":   date_str,
+                    "side":        side,
+                    "player_id":   info["person"]["id"],
+                    "position":    info["position"]["code"],
+                    "bat_order":   info["position"]["batOrder"],
+                    "bat_side":    info["person"].get("batSide", {}).get("code"),
+                    "throw_side":  info["person"].get("pitchHand", {}).get("code"),
+                }
+                rows.append(row)
+
     if not rows:
         print(f"✅ No Lineups for {date_str}")
-    else:
-        df = pd.DataFrame(rows)
-        df.to_parquet(out, index=False)
-        print(f"✅ Lineups: Wrote {len(df)} → {out}")
+        return
+
+    df = pd.DataFrame(rows)
+    df.to_parquet(out_file, index=False)
+    print(f"✅ Lineup: Wrote {len(df)} rows → {out_file}")
+
 
 def iterate_dates(start_dt, end_dt, mode):
     if mode == "daily":

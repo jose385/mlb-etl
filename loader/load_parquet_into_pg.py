@@ -1,90 +1,73 @@
-# loader/load_parquet_into_pg.py
+#!/usr/bin/env python3
 import os
 import io
+import glob
 import argparse
-from datetime import datetime
 import psycopg2
+from psycopg2 import sql
 import pandas as pd
 
+def sanitize(col: str) -> str:
+    return col.replace(".", "_").replace("-", "_").lower()
+
 def connect():
-    """
-    Connect to Postgres using the PG_DSN environment variable.
-    PG_DSN should look like: postgresql://user:pass@host:port/dbname
-    """
     dsn = os.getenv("PG_DSN")
-    if not dsn:
-        raise RuntimeError("PG_DSN environment variable is required")
     return psycopg2.connect(dsn)
 
-def load_table(conn, table: str, df: pd.DataFrame):
-    """
-    COPY a pandas DataFrame into a Postgres table via COPY FROM STDIN.
-    - Sanitizes column names (no dots, hyphens, uppercase).
-    """
-    # 1) sanitize column names
-    safe_cols = [
-        c.replace(".", "_")
-         .replace("-", "_")
-         .lower()
-        for c in df.columns
-    ]
-    df.columns = safe_cols
+def ensure_table(conn, table: str, df: pd.DataFrame):
+    cols = [sql.Identifier(sanitize(c)) for c in df.columns]
+    types = [sql.SQL("text")] * len(cols)
+    cols_ddl = sql.SQL(", ").join(
+        sql.Composed([c, sql.SQL(" "), t])
+        for c, t in zip(cols, types)
+    )
+    create_sql = sql.SQL("CREATE TABLE IF NOT EXISTS {} ({})").format(
+        sql.Identifier(table),
+        cols_ddl
+    )
+    with conn.cursor() as cur:
+        cur.execute(create_sql)
+    conn.commit()
 
-    # 2) write DataFrame to a CSV buffer
+def load_table(conn, table: str, df: pd.DataFrame):
+    # sanitize DataFrame columns
+    df.columns = [sanitize(c) for c in df.columns]
+
+    # ensure table exists with matching columns
+    ensure_table(conn, table, df)
+
+    # write to buffer, no header
     buf = io.StringIO()
     df.to_csv(buf, index=False, header=False)
     buf.seek(0)
 
-    # 3) perform COPY
-    cols_sql = ",".join(safe_cols)
-    print(f"⏳ Loading {table}: {len(df)} rows into public.{table} ({cols_sql})")
+    # COPY
     with conn.cursor() as cur:
-        cur.copy_expert(
-            f"COPY public.{table} ({cols_sql}) FROM STDIN WITH (FORMAT CSV)",
-            buf
+        copy_sql = sql.SQL("COPY {} FROM STDIN WITH (FORMAT CSV)").format(
+            sql.Identifier(table)
         )
+        cur.copy_expert(copy_sql, buf)
     conn.commit()
-    print(f"✅ Loaded {len(df)} rows into public.{table}")
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Load all Parquet files in a directory into Postgres tables"
-    )
-    parser.add_argument(
-        "--input-dir",
-        help="Directory containing <table>_YYYY-MM-DD.parquet files",
-        default="stage"
-    )
-    parser.add_argument(
-        "--tables",
-        nargs="+",
-        required=True,
-        help="List of tables to load, e.g.: statcast statsapi_playlog roster lineup"
-    )
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--stage", help="Staging dir", default="stage")
     args = parser.parse_args()
 
     conn = connect()
+    stage = args.stage
 
-    for table in args.tables:
-        prefix = f"{table}_"
-        print(f"\n▶ Scanning for {table} files in {args.input_dir}…")
-        for fn in sorted(os.listdir(args.input_dir)):
-            if not fn.startswith(prefix) or not fn.endswith(".parquet"):
-                continue
+    # find all parquet files by pattern
+    for path in sorted(glob.glob(os.path.join(stage, "*.parquet"))):
+        table = os.path.splitext(os.path.basename(path))[0]  # e.g. statcast_2021-04-01
+        # derive table name (e.g. statcast)
+        table = table.split("_")[0]
 
-            path = os.path.join(args.input_dir, fn)
-            date_str = fn[len(prefix):-8]  # strip off prefix_ and .parquet
-            print(f"  • {date_str}: reading {fn}…", end=" ")
-
-            df = pd.read_parquet(path)
-            if df.empty:
-                print("empty, skipping")
-            else:
-                print(f"{len(df)} rows → loading")
-                load_table(conn, table, df)
+        print(f"► Loading {os.path.basename(path)} into table '{table}'…")
+        df = pd.read_parquet(path)
+        load_table(conn, table, df)
 
     conn.close()
-    print("\n🎉 Done.")
 
 if __name__ == "__main__":
     main()

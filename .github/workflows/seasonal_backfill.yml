@@ -73,9 +73,9 @@ jobs:
           PG_DSN: postgresql://postgres:postgres@localhost:5432/mydb
         run: |
           python3 loader/load_parquet_into_pg.py \
-            --input-dir stage \
-            --tables statcast statsapi_playlog rosters lineup
-            
+            --dsn "$PG_DSN" \
+            --stage "stage"
+
 
       - name: Backfill Lineups
         run: |

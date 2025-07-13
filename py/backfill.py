@@ -101,6 +101,7 @@ def fetch_lineup_for_date(date_str: str, output_dir: str):
         print(f"⏭️ Skipping Lineups for {date_str} (already exists)")
         return
 
+    # get all that day's games
     games = statsapi.schedule(start_date=date_str, end_date=date_str) or []
     rows = []
 
@@ -110,28 +111,32 @@ def fetch_lineup_for_date(date_str: str, output_dir: str):
             continue
 
         try:
-            # NEW: use the `boxscore` endpoint and drill into liveData.boxscore.teams[…].batters
-            resp = statsapi.get("boxscore", {"gamePk": game_pk})
-            teams = resp["liveData"]["boxscore"]["teams"]
+            # ← use boxscore_data() instead of get("boxscore",…)
+            box = statsapi.boxscore_data(game_pk)
+            teams = box["teams"]
         except Exception as e:
             print(f"❌ Lineup error for game {game_pk} on {date_str}: {e}")
             continue
 
         for side in ("home", "away"):
-            batters = teams[side]["batters"]
+            batters = teams[side]["batters"]  # list of player-IDs in batting order
             for bat_id in batters:
-                info = teams[side]["players"][f"ID{bat_id}"]
-                row = {
-                    "game_pk":     game_pk,
-                    "game_date":   date_str,
-                    "side":        side,
-                    "player_id":   info["person"]["id"],
-                    "position":    info["position"]["code"],
-                    "bat_order":   info["position"]["batOrder"],
-                    "bat_side":    info["person"].get("batSide", {}).get("code"),
-                    "throw_side":  info["person"].get("pitchHand", {}).get("code"),
-                }
-                rows.append(row)
+                player_key = f"ID{bat_id}"
+                info = teams[side]["players"].get(player_key, {})
+                person = info.get("person", {})
+                pos    = info.get("position", {})
+
+                rows.append({
+                    "game_pk":    game_pk,
+                    "game_date":  date_str,
+                    "side":       side,
+                    "player_id":  person.get("id"),
+                    "player_name": person.get("fullName"),
+                    "position":   pos.get("code"),
+                    "bat_order":  pos.get("batOrder"),
+                    "bat_side":   person.get("batSide", {}).get("code"),
+                    "throw_side": person.get("pitchHand", {}).get("code"),
+                })
 
     if not rows:
         print(f"✅ No Lineups for {date_str}")
@@ -140,7 +145,6 @@ def fetch_lineup_for_date(date_str: str, output_dir: str):
     df = pd.DataFrame(rows)
     df.to_parquet(out_file, index=False)
     print(f"✅ Lineup: Wrote {len(df)} rows → {out_file}")
-
 
 def iterate_dates(start_dt, end_dt, mode):
     if mode == "daily":

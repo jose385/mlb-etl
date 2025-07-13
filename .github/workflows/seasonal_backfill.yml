@@ -59,7 +59,7 @@ jobs:
         run: |
           # build our date range from the seasonal input
           START="${{ github.event.inputs.season }}-04-01"
-          END  ="${{ github.event.inputs.season }}-05-03"
+          END="${{ github.event.inputs.season }}-05-03"
 
           # default is daily; if the “monthly” input is set true, switch to monthly mode
           MODE_FLAG=""

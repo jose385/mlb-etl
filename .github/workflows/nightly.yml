@@ -10,120 +10,35 @@ on:
 
 
 jobs:
-
-  etl:
-
+  backfill:
     runs-on: ubuntu-latest
-
-
-    services:
-
-      postgres:
-
-        image: postgres:16-alpine
-
-        env:
-
-          POSTGRES_USER: ghactions
-
-          POSTGRES_PASSWORD: secret
-
-          POSTGRES_DB: mlb
-
-        ports:
-
-          - 5432:5432
-
-
     env:
-
-      PG_DSN: postgres://ghactions:secret@localhost:5432/mlb
-
+      PG_DSN: postgresql://postgres:postgres@localhost:5432/mydb
       OUTPUT_DIR: stage
-
-      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-
-      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-
-
     steps:
-
       - uses: actions/checkout@v4
 
-
-      - name: Cache pip
-
-        uses: actions/cache@v4
-
-        with:
-
-          path: ~/.cache/pip
-
-          key: ${{ runner.os }}-pip-${{ hashFiles('py/requirements.txt') }}
-
-
-      - name: Set up Python
-
+      - name: Setup Python
         uses: actions/setup-python@v5
-
         with:
+          python-version: 3.12
 
-          python-version: '3.12'
-
-
-      - name: Install system dependencies
-
+      - name: Install Dependencies
         run: |
+          python -m pip install --upgrade pip
+          pip install -r py/requirements.txt
 
-          sudo apt-get update
-
-          sudo apt-get install -y libpq-dev python3-dev build-essential
-
-
-      - name: Install deps
-
-        run: pip install -r py/requirements.txt
-
-      - name: Pull Rosters
-
-        run: python py/rosters_etl.py
-
-        env:
-
-          OUTPUT_DIR: stage
-
-          PG_DSN: ${{ secrets.PG_DSN }}
-
-
-
-      - name: Pull Statcast (pybaseball)
-
-        run: python py/statcast_csv_pull.py
-
-
-      - name: Pull StatsAPI data
-
-        run: python py/statsapi_etl.py
-
-      - name: Pull Starting Lineups (Yesterday)
-
+      - name: Backfill Statcast, PBP & Rosters
         run: |
+          START="${{ github.event.inputs.season }}-04-01"
+          END="${{ github.event.inputs.season }}-05-03"
+          MONTHLY_FLAG=""
+          if [ "${{ github.event.inputs.monthly }}" = "true" ]; then
+            MONTHLY_FLAG="--monthly"
+          fi
 
-          DATE=$(date -d "yesterday" +%F)
-
-          python py/lineup_etl.py --end_date $DATE
-
-        env:
-
-          PG_DSN: ${{ secrets.PG_DSN }}
-          
-
-
-
-
-
-
-      - name: Load into Postgres
-
-        run: python loader/load_parquet_into_pg.py
+          python py/backfill.py --start "$START" --end "$END" $MONTHLY_FLAG
+      - name: Load Parquet into Postgres
+        run: |
+          python3 loader/load_parquet_into_pg.py --stage stage
 

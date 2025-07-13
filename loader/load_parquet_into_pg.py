@@ -12,7 +12,7 @@ Flags:
 Env:
   PG_DSN       Postgres DSN, e.g. postgresql://user:pw@host:5432/db
 """
-
+import os
 import argparse
 import io
 from pathlib import Path

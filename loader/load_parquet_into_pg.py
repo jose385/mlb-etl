@@ -21,7 +21,7 @@ def load_table(conn, table: str, df: pd.DataFrame):
     buf.seek(0)
 
     with conn.cursor() as cur:
-        cur.copy_expert(f"COPY mlb.{table} ({cols}) FROM STDIN WITH (FORMAT CSV)", buf)
+        cur.copy_expert(f"COPY {table} ({cols}) FROM STDIN WITH (FORMAT CSV)", buf)
     conn.commit()
     print(f"✅ Loaded {len(df)} rows into mlb.{table}")
 

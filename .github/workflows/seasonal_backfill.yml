@@ -57,32 +57,22 @@ jobs:
 
       - name: Backfill Statcast, PBP & Rosters
         run: |
-          # build our date range from the seasonal input
-          START="${{ github.event.inputs.season }}-04-01"
-          END="${{ github.event.inputs.season }}-05-03"
-
-          # default is daily; if the “monthly” input is set true, switch to monthly mode
-          MODE_FLAG=""
-          if [ "${{ github.event.inputs.monthly }}" = "true" ]; then
-            MODE_FLAG="--mode monthly"
-          fi
-
-          # invoke the new backfill script
+          START="2021-04-01"
+          END="2021-04-30"
           python3 py/backfill.py \
             --start "$START" \
             --end   "$END" \
-            $MODE_FLAG \
+            --monthly \
             --output stage
 
-
-
       - name: Load Parquet into Postgres
-        env:
+        env:    
           PG_DSN: postgresql://postgres:postgres@localhost:5432/mydb
         run: |
           python3 loader/load_parquet_into_pg.py \
             --input-dir stage \
-            --tables statcast statsapi_playlog rosters lineup
+            --tables statcast statsapi_playlog roster lineup
+
 
 
       - name: Backfill Lineups

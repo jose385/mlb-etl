@@ -1,4 +1,4 @@
-name: MLB Seasonal Backfill
+name: Seasonal Backfill
 
 on:
   workflow_dispatch:
@@ -11,43 +11,59 @@ on:
 jobs:
   backfill:
     runs-on: ubuntu-latest
+    timeout-minutes: 90
+
     services:
       postgres:
         image: postgres:15
         env:
+          POSTGRES_DB: mydb
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: mydb
         ports: ['5432:5432']
         options: >-
-          --health-cmd "pg_isready -U postgres"
+          --health-cmd "pg_isready -U postgres -d mydb"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
+
     env:
-      PG_DSN: postgres://postgres:postgres@localhost:5432/mydb
+      PG_DSN: postgresql://postgres:postgres@localhost:5432/mydb
       OUTPUT_DIR: stage
 
     steps:
       - uses: actions/checkout@v4
+
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
-          pip install -r py/requirements.txt
+          python3 -m pip install --upgrade pip
+          pip3 install -r py/requirements.txt
+
+      - name: Create schema & tables
+        run: |
+          psql "$PG_DSN" << 'EOF'
+            CREATE SCHEMA IF NOT EXISTS public;
+            \i migrations/001_create_statcast_table.sql
+            \i migrations/002_allow_roster_player_null.sql
+          EOF
+
       - name: Backfill Statcast, PBP & Rosters
         run: |
           SEASON=${{ github.event.inputs.season }}
-          python py/backfill.py --start "$SEASON-04-01" --end "$SEASON-10-03"
+          python3 py/backfill.py \
+            --start "$SEASON-04-01" \
+            --end   "$SEASON-10-03"
+
       - name: Load Parquet into Postgres
         run: |
-          # wait for DB healthy
-          pg_isready -U postgres -d mydb -h localhost
-          python loader/load_parquet_into_pg.py
+          python3 loader/load_parquet_into_pg.py
+
       - name: Backfill Lineups
         run: |
           SEASON=${{ github.event.inputs.season }}
-          python py/lineup_etl.py --season "$SEASON"
+          python3 py/lineup_etl.py --season "$SEASON"

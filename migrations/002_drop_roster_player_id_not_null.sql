@@ -1,6 +1,6 @@
 -- Allow NULLs in mlb.roster.player_id so COPY never fails on missing IDs
 
-ALTER TABLE mlb.roster
+ALTER TABLE public.roster
 
   ALTER COLUMN player_id DROP NOT NULL;
 

@@ -7,7 +7,10 @@ on:
         description: 'Season year to backfill (e.g. 2021)'
         required: true
         type: string
-
+      monthly:
+        description: 'Fetch Statcast per month instead of day-by-day?'
+        required: false
+        type: boolean
 jobs:
   backfill:
     runs-on: ubuntu-latest
@@ -54,10 +57,16 @@ jobs:
 
       - name: Backfill Statcast, PBP & Rosters
         run: |
-          SEASON=${{ github.event.inputs.season }}
-          python3 py/backfill.py \
-            --start "$SEASON-04-01" \
-            --end   "$SEASON-10-03"
+          START="${{ github.event.inputs.season }}-04-01"
+          END="${{ github.event.inputs.season }}-10-03"
+          # if monthly input is "true", include --monthly
+          MONTHLY_FLAG=""
+          if [ "${{ github.event.inputs.monthly }}" = "true" ]; then
+            MONTHLY_FLAG="--monthly"
+          fi
+
+          python py/backfill.py --start "$START" --end "$END" $MONTHLY_FLAG
+
 
       - name: Load Parquet into Postgres
         run: |

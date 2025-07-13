@@ -1,130 +1,100 @@
 #!/usr/bin/env python3
-"""
-load_parquet_into_pg.py
-
-Scan a directory of Parquet files (statcast, statsapi_playlog, roster, lineup),
-CREATE TABLE IF NOT EXISTS for each, and bulk-load via COPY with an explicit
-column list to avoid schema mismatches.
-"""
-
 import os
 import io
 import argparse
+from pathlib import Path
+
 import pandas as pd
 import psycopg2
 from psycopg2 import sql
-from datetime import datetime
 
-
-def sanitize(col: str) -> str:
-    """Sanitize DataFrame column names into valid Postgres identifiers."""
-    return (
-        col.strip()
-           .replace(".", "_")
-           .replace("-", "_")
-           .replace(" ", "_")
-           .lower()
-    )
-
-
-def connect(dsn: str):
-    """Establish and return a new Postgres connection."""
+def connect():
+    """
+    Connect to Postgres using the PG_DSN environment variable.
+    Example: export PG_DSN="postgresql://user:pass@host:5432/dbname"
+    """
+    dsn = os.getenv("PG_DSN")
+    if not dsn:
+        raise RuntimeError("PG_DSN environment variable is not set")
     return psycopg2.connect(dsn)
-
-
-def ensure_table(conn, table: str, df: pd.DataFrame):
-    """
-    CREATE TABLE IF NOT EXISTS with every column as TEXT.
-    Does *not* alter existing tables—only creates if missing.
-    """
-    cols = [
-        sql.SQL("{} TEXT").format(sql.Identifier(c))
-        for c in df.columns
-    ]
-    create = sql.SQL("CREATE TABLE IF NOT EXISTS {} ({})").format(
-        sql.Identifier(table),
-        sql.SQL(", ").join(cols)
-    )
-    with conn.cursor() as cur:
-        cur.execute(create)
-    conn.commit()
-
 
 def load_table(conn, table: str, df: pd.DataFrame):
     """
-    Given an open connection, a table name, and a DataFrame:
-     1) Sanitize its columns,
-     2) CREATE TABLE IF NOT EXISTS,
-     3) COPY INTO that table using an explicit column list.
+    COPY only the intersection of df.columns and actual table columns.
     """
-    # 1) Sanitize & rename columns
-    sanitized = [sanitize(c) for c in df.columns]
-    df.columns = sanitized
+    if df.empty:
+        print(f"→ No rows to load into `{table}`; skipping.")
+        return
 
-    # 2) Ensure table exists with those columns
-    ensure_table(conn, table, df)
-
-    # 3) Bulk-load via COPY with explicit column list
+    # 1) Dump DataFrame to in-memory CSV
     buf = io.StringIO()
     df.to_csv(buf, index=False, header=False)
     buf.seek(0)
 
-    col_list = sql.SQL(", ").join(sql.Identifier(c) for c in sanitized)
-    copy_sql = sql.SQL("COPY {} ({}) FROM STDIN WITH (FORMAT CSV)").format(
-        sql.Identifier(table),
-        col_list
-    )
+    # 2) Fetch actual columns for this table from Postgres
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_schema = 'public'
+              AND table_name   = %s
+            ORDER BY ordinal_position
+            """,
+            (table,),
+        )
+        db_cols = {row[0] for row in cur.fetchall()}
+
+    # 3) Compute the common columns (in order)
+    common_cols = [c for c in df.columns if c in db_cols]
+    if not common_cols:
+        print(f"⚠️  No matching columns for table `{table}`; skipping.")
+        return
+
+    # 4) Build and execute the COPY statement
+    cols_sql = ",".join(common_cols)
+    copy_sql = f"COPY public.{table} ({cols_sql}) FROM STDIN WITH (FORMAT CSV)"
     with conn.cursor() as cur:
         cur.copy_expert(copy_sql, buf)
     conn.commit()
-    print(f"✅ Loaded {len(df)} rows into `{table}`")
 
-
-def scan_and_load(dsn: str, stage: str):
-    """
-    Walk the `stage/` directory, find all .parquet files,
-    infer the table name from the filename prefix, and load.
-    """
-    conn = connect(dsn)
-
-    for fn in sorted(os.listdir(stage)):
-        if not fn.endswith(".parquet"):
-            continue
-
-        # filename like: statcast_2021-04-01.parquet
-        table, _ = os.path.splitext(fn)
-        path = os.path.join(stage, fn)
-
-        print(f"⏳ Loading {table}…")
-        df = pd.read_parquet(path)
-        if df.empty:
-            print(f"⚠️  Skipping {table}: empty DataFrame")
-            continue
-
-        load_table(conn, table, df)
-
-    conn.close()
-
+    print(f"✅ Loaded {len(df)} rows into public.{table} ({len(common_cols)} columns)")
 
 def main():
     p = argparse.ArgumentParser(
-        description="Load all Parquet files in a folder into Postgres."
+        description="Load all Parquet files in a folder into Postgres"
     )
     p.add_argument(
         "--stage",
-        default=os.getenv("INPUT_DIR", "stage"),
-        help="Directory of Parquet files (default: stage/)"
-    )
-    p.add_argument(
-        "--dsn",
-        default=os.getenv("PG_DSN"),
-        required=True,
-        help="Postgres DSN (e.g. postgresql://user:pass@host:5432/db)"
+        help="Input directory containing .parquet files (default=stage)",
+        default="stage",
     )
     args = p.parse_args()
-    scan_and_load(args.dsn, args.stage)
-    print("🎉 All done.")
 
+    stage_dir = Path(args.stage)
+    if not stage_dir.is_dir():
+        raise RuntimeError(f"Stage directory not found: {stage_dir}")
+
+    # find all parquet files named like statcast_YYYY-MM-DD.parquet
+    parquet_files = sorted(stage_dir.glob("*.parquet"))
+    if not parquet_files:
+        print("⚠️  No Parquet files found in", stage_dir)
+        return
+
+    conn = connect()
+    print(f"🔌 Connected to Postgres via {os.getenv('PG_DSN')}")
+
+    for pq in parquet_files:
+        table = pq.name.split("_", 1)[0]  # statcast_... → statcast
+        print(f"⏳ Loading {pq.name} into `{table}`…", end=" ")
+        df = pd.read_parquet(pq)
+        try:
+            load_table(conn, table, df)
+        except Exception as e:
+            print(f"❌ Error loading {pq.name} -> {table}: {e}")
+
+    conn.close()
+    print("🎉 All done!")
 
 if __name__ == "__main__":
     main()

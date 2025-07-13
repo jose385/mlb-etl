@@ -69,8 +69,13 @@ jobs:
 
 
       - name: Load Parquet into Postgres
+        env:
+          PG_DSN: postgresql://postgres:postgres@localhost:5432/mydb
         run: |
-          python3 loader/load_parquet_into_pg.py
+          python3 loader/load_parquet_into_pg.py \
+            --input-dir stage \
+            --tables statcast statsapi_playlog rosters lineup
+            
 
       - name: Backfill Lineups
         run: |

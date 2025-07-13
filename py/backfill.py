@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 
 import pandas as pd
 from pybaseball import statcast
-import mlb_statsapi as statsapi   # note: `mlb_statsapi`, not plain statsapi
+import statsapi   # note: `mlb_statsapi`, not plain statsapi
 
 def fetch_statcast_for_date(date_str, out_dir):
     out = os.path.join(out_dir, f"statcast_{date_str}.parquet")

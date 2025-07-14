@@ -55,7 +55,7 @@ jobs:
             \i migrations/002_allow_roster_player_null.sql
           EOF
 
-      - name: Backfill Statcast, PBP & Rosters
+      - name: Backfill Statcast, PBP & Rosters and lineupa
         run: |
           START="2021-04-01"
           END="2021-04-30"
@@ -74,8 +74,3 @@ jobs:
             --tables statcast statsapi_playlog roster lineup
 
 
-
-      - name: Backfill Lineups
-        run: |
-          SEASON=${{ github.event.inputs.season }}
-          python3 py/lineup_etl.py --season "$SEASON"

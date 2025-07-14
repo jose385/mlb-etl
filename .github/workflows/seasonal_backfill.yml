@@ -53,6 +53,9 @@ jobs:
             CREATE SCHEMA IF NOT EXISTS public;
             \i migrations/001_create_statcast_table.sql
             \i migrations/002_allow_roster_player_null.sql
+            \i migrations/003_create_statsapi_playlog_table.sql
+            \i migrations/004_create_roster_table.sql
+            \i migrations/005_create_lineup_table.sql
           EOF
 
       - name: Backfill Statcast, PBP & Rosters and lineupa

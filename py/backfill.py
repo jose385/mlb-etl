@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+ha#!/usr/bin/env python
 
 """
 backfill.py – Historical backfill for Statcast, StatsAPI PBP, Rosters, and Lineups.
@@ -65,7 +65,9 @@ def fetch_statsapi_for_date(date_str: str, out_dir: Path):
 
 
 def fetch_roster_for_date(date_str: str, output_dir: str):
-    """Fetch one day's rosters (home & away) and write to Parquet if new."""
+    """
+    Fetch one day's rosters (home & away) and write to Parquet if new.
+    """
     out_file = os.path.join(output_dir, f"roster_{date_str}.parquet")
     if os.path.exists(out_file):
         print(f"⏭️ Skipping Rosters for {date_str} (already exists)")
@@ -73,23 +75,37 @@ def fetch_roster_for_date(date_str: str, output_dir: str):
 
     games = statsapi.schedule(start_date=date_str, end_date=date_str) or []
     rows = []
-
     for g in games:
+        game_pk = g.get("game_id") or g.get("game_pk")
+        season = datetime.fromisoformat(date_str).year
         for team_id, side in ((g["home_id"], "home"), (g["away_id"], "away")):
-            data = statsapi.roster(team_id, date=date_str)
-            # StatsAPI sometimes returns a dict with "roster" key, sometimes a list:
-            records = data.get("roster") if isinstance(data, dict) and "roster" in data else data or []
+            try:
+                data = statsapi.roster(team_id, date=date_str)
+            except Exception as e:
+                print(f"❌ Roster error for team {team_id}@{date_str}: {e}")
+                continue
 
+            # pull out the actual roster list
+            if isinstance(data, dict) and "roster" in data:
+                records = data["roster"]
+            elif isinstance(data, list):
+                records = data
+            else:
+                records = []
+
+            # filter and normalize
             for r in records:
-                # skip any non‐dict entries
                 if not isinstance(r, dict):
-                    print(f"⚠️  Skipping malformed roster record for team {team_id}@{date_str}: {r!r}")
+                    # skip anything that isn't a dict
+                    print(f"⚠️ Skipping malformed roster record for team {team_id}@{date_str}: {r!r}")
                     continue
 
-                row = r.copy()
-                row["team_id"]   = team_id
-                row["game_date"] = date_str
-                row["side"]      = side
+                row = dict(r)
+                row.update({
+                    "team_id": team_id,
+                    "game_date": date_str,
+                    "side": side
+                })
                 rows.append(row)
 
     if not rows:
@@ -97,43 +113,58 @@ def fetch_roster_for_date(date_str: str, output_dir: str):
         return
 
     df = pd.DataFrame(rows)
+    # normalize column names: no dots, no hyphens, lowercase
     df.columns = [c.replace(".", "_").replace("-", "_").lower() for c in df.columns]
     df.to_parquet(out_file, index=False)
     print(f"✅ Rosters: Wrote {len(df)} rows → {out_file}")
 
 
-def fetch_lineup_for_date(date_str: str, out_dir: Path):
-    out_file = out_dir / f"lineup_{date_str}.parquet"
-    if out_file.exists():
-        print(f"⏭️  Skipping Lineups for {date_str}")
+
+def fetch_lineup_for_date(date_str: str, output_dir: str):
+    """
+    Fetch one day's starting lineups via the boxscore endpoint
+    and write to Parquet if new.
+    """
+    out_file = os.path.join(output_dir, f"lineup_{date_str}.parquet")
+    if os.path.exists(out_file):
+        print(f"⏭️ Skipping Lineups for {date_str} (already exists)")
         return
+
+    # get list of games
     games = statsapi.schedule(start_date=date_str, end_date=date_str) or []
     rows = []
     for g in games:
-        pk = g.get("game_id") or g.get("game_pk")
-        if not pk:
+        game_pk = g.get("game_id") or g.get("game_pk")
+        if not game_pk:
             continue
         try:
-            data = statsapi.boxscore_data(pk)
-            home = data["liveData"]["boxscore"]["teams"]["home"]["batters"]
-            away = data["liveData"]["boxscore"]["teams"]["away"]["batters"]
-            for side, batters in (("home", home), ("away", away)):
-                for pid in batters:
+            # note: this is the boxscore endpoint, not preview
+            data = statsapi.get("game_boxscore", {"gamePk": game_pk})
+            teams = data.get("teams", {})
+            for side in ("home", "away"):
+                team_info = teams.get(side, {})
+                batters = team_info.get("batters", [])
+                for player_idx, pid in enumerate(batters, start=1):
+                    # each pid is a numeric player ID
                     rows.append({
-                        "game_pk": pk,
                         "game_date": date_str,
-                        "side": side,
-                        "player_id": pid
+                        "game_pk": game_pk,
+                        "team_side": side,
+                        "slot": player_idx,
+                        "player_id": pid,
                     })
         except Exception as e:
-            msg = getattr(e, "message", e)
-            print(f"❌ Lineup error for game {pk}@{date_str}: {msg}")
+            print(f"❌ Lineup error for game {game_pk}@{date_str}: {e}")
+            continue
+
     if not rows:
         print(f"✅ No Lineups for {date_str}")
         return
+
     df = pd.DataFrame(rows)
     df.to_parquet(out_file, index=False)
-    print(f"✅ Lineups: Wrote {len(df)} rows → {out_file.name}")
+    print(f"✅ Lineups: Wrote {len(df)} rows → {out_file}")
+
 
 
 def main():

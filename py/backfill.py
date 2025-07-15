@@ -56,12 +56,20 @@ def fetch_statsapi_for_date(date_str: str, out_dir: Path):
                          .get("plays", {}).get("allPlays", [])
             
             for play in plays:
+                # Get the required fields
+                at_bat_index = play.get("about", {}).get("atBatIndex")
+                event_index = play.get("about", {}).get("playIndex")
+                
+                # Skip records with missing required primary key fields
+                if at_bat_index is None or event_index is None:
+                    continue
+                
                 # Flatten the nested structure to match your table schema
                 row = {
                     "game_date": date_str,
                     "game_pk": pk,
-                    "at_bat_index": play.get("about", {}).get("atBatIndex"),
-                    "event_index": play.get("about", {}).get("playIndex"), 
+                    "at_bat_index": at_bat_index,
+                    "event_index": event_index, 
                     "inning": play.get("about", {}).get("inning"),
                     "half_inning": play.get("about", {}).get("halfInning"),
                     "pitcher": play.get("matchup", {}).get("pitcher", {}).get("id"),
@@ -70,7 +78,6 @@ def fetch_statsapi_for_date(date_str: str, out_dir: Path):
                     "description": play.get("result", {}).get("description"),
                     "count_balls": play.get("count", {}).get("balls"),
                     "count_strikes": play.get("count", {}).get("strikes"),
-                    # Add other fields as needed to match your schema
                 }
                 rows.append(row)
                 

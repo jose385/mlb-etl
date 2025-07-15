@@ -45,41 +45,30 @@ def fetch_statsapi_for_date(date_str: str, out_dir: Path):
         return
     
     games = statsapi.schedule(start_date=date_str, end_date=date_str) or []
+    print(f"🔍 DEBUG: Found {len(games)} games for {date_str}")
+    
+    if not games:
+        print(f"✅ No games scheduled for {date_str}")
+        return
+    
     rows = []
     for g in games:
         pk = g.get("game_id") or g.get("game_pk")
         if not pk:
             continue
+        print(f"🔍 DEBUG: Processing game {pk}")
+        
         try:
             resp = statsapi.get("game_playByPlay", {"gamePk": pk})
             plays = resp.get("allPlays") or resp.get("liveData", {}) \
                          .get("plays", {}).get("allPlays", [])
             
-            for play in plays:
-                # Get the required fields
-                at_bat_index = play.get("about", {}).get("atBatIndex")
-                event_index = play.get("about", {}).get("playIndex")
-                
-                # Skip records with missing required primary key fields
-                if at_bat_index is None or event_index is None:
-                    continue
-                
-                # Flatten the nested structure to match your table schema
-                row = {
-                    "game_date": date_str,
-                    "game_pk": pk,
-                    "at_bat_index": at_bat_index,
-                    "event_index": event_index, 
-                    "inning": play.get("about", {}).get("inning"),
-                    "half_inning": play.get("about", {}).get("halfInning"),
-                    "pitcher": play.get("matchup", {}).get("pitcher", {}).get("id"),
-                    "batter": play.get("matchup", {}).get("batter", {}).get("id"),
-                    "events": play.get("result", {}).get("event"),
-                    "description": play.get("result", {}).get("description"),
-                    "count_balls": play.get("count", {}).get("balls"),
-                    "count_strikes": play.get("count", {}).get("strikes"),
-                }
-                rows.append(row)
+            print(f"🔍 DEBUG: Found {len(plays)} plays for game {pk}")
+            
+            # TEMPORARILY: Just use json_normalize like the old version to test
+            if plays:
+                for play in plays:
+                    rows.append(play)
                 
         except Exception as e:
             print(f"❌ PBP error for game {pk}@{date_str}: {e}")
@@ -88,7 +77,8 @@ def fetch_statsapi_for_date(date_str: str, out_dir: Path):
         print(f"✅ No PBP data for {date_str}")
         return
     
-    df = pd.DataFrame(rows)
+    # Use json_normalize like the original version
+    df = pd.json_normalize(rows)
     df.to_parquet(out_file, index=False)
     print(f"✅ StatsAPI: Wrote {len(df)} rows → {out_file.name}")
 
@@ -103,13 +93,27 @@ def fetch_roster_for_date(date_str: str, output_dir: str):
         return
 
     games = statsapi.schedule(start_date=date_str, end_date=date_str) or []
+    print(f"🔍 DEBUG: Found {len(games)} games for roster data on {date_str}")
+    
+    if not games:
+        print(f"✅ No games scheduled for {date_str}")
+        return
+    
     rows = []
     for g in games:
         game_pk = g.get("game_id") or g.get("game_pk")
-        season = datetime.fromisoformat(date_str).year
         for team_id, side in ((g["home_id"], "home"), (g["away_id"], "away")):
+            print(f"🔍 DEBUG: Fetching roster for team {team_id} ({side})")
+            
             try:
                 data = statsapi.roster(team_id, date=date_str)
+                print(f"🔍 DEBUG: Roster API returned type: {type(data)}")
+                
+                if hasattr(data, '__len__'):
+                    print(f"🔍 DEBUG: Data length: {len(data)}")
+                else:
+                    print(f"🔍 DEBUG: Data content preview: {str(data)[:200]}")
+                
             except Exception as e:
                 print(f"❌ Roster error for team {team_id}@{date_str}: {e}")
                 continue
@@ -117,16 +121,19 @@ def fetch_roster_for_date(date_str: str, output_dir: str):
             # pull out the actual roster list
             if isinstance(data, dict) and "roster" in data:
                 records = data["roster"]
+                print(f"🔍 DEBUG: Using data['roster'], found {len(records)} records")
             elif isinstance(data, list):
                 records = data
+                print(f"🔍 DEBUG: Using data directly, found {len(records)} records")
             else:
                 records = []
+                print(f"⚠️ DEBUG: Unexpected roster data format: {type(data)}")
+                print(f"⚠️ DEBUG: Data sample: {str(data)[:200]}")
 
             # filter and normalize
             for r in records:
                 if not isinstance(r, dict):
-                    # skip anything that isn't a dict
-                    print(f"⚠️ Skipping malformed roster record for team {team_id}@{date_str}: {r!r}")
+                    print(f"⚠️ DEBUG: Skipping non-dict record: {type(r)}")
                     continue
 
                 row = dict(r)
@@ -137,12 +144,13 @@ def fetch_roster_for_date(date_str: str, output_dir: str):
                 })
                 rows.append(row)
 
+    print(f"🔍 DEBUG: Total roster records collected: {len(rows)}")
+
     if not rows:
         print(f"✅ No Rosters for {date_str}")
         return
 
     df = pd.DataFrame(rows)
-    # normalize column names: no dots, no hyphens, lowercase
     df.columns = [c.replace(".", "_").replace("-", "_").lower() for c in df.columns]
     df.to_parquet(out_file, index=False)
     print(f"✅ Rosters: Wrote {len(df)} rows → {out_file}")

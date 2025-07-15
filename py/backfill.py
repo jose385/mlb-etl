@@ -45,7 +45,6 @@ def fetch_statsapi_for_date(date_str: str, out_dir: Path):
         return
     
     games = statsapi.schedule(start_date=date_str, end_date=date_str) or []
-    print(f"🔍 DEBUG: Found {len(games)} games for {date_str}")
     
     if not games:
         print(f"✅ No games scheduled for {date_str}")
@@ -56,19 +55,41 @@ def fetch_statsapi_for_date(date_str: str, out_dir: Path):
         pk = g.get("game_id") or g.get("game_pk")
         if not pk:
             continue
-        print(f"🔍 DEBUG: Processing game {pk}")
         
         try:
             resp = statsapi.get("game_playByPlay", {"gamePk": pk})
             plays = resp.get("allPlays") or resp.get("liveData", {}) \
                          .get("plays", {}).get("allPlays", [])
             
-            print(f"🔍 DEBUG: Found {len(plays)} plays for game {pk}")
-            
-            # TEMPORARILY: Just use json_normalize like the old version to test
-            if plays:
-                for play in plays:
-                    rows.append(play)
+            for play in plays:
+                # Get the required fields
+                at_bat_index = play.get("about", {}).get("atBatIndex")
+                event_index = play.get("about", {}).get("playIndex")
+                
+                # Skip records with missing required primary key fields
+                if at_bat_index is None or event_index is None:
+                    continue
+                
+                # Flatten the nested structure to match your table schema
+                row = {
+                    "game_date": date_str,
+                    "game_pk": pk,
+                    "at_bat_index": at_bat_index,
+                    "event_index": event_index, 
+                    "inning": play.get("about", {}).get("inning"),
+                    "half_inning": play.get("about", {}).get("halfInning"),
+                    "pitcher": play.get("matchup", {}).get("pitcher", {}).get("id"),
+                    "batter": play.get("matchup", {}).get("batter", {}).get("id"),
+                    "events": play.get("result", {}).get("event"),
+                    "description": play.get("result", {}).get("description"),
+                    "count_balls": play.get("count", {}).get("balls"),
+                    "count_strikes": play.get("count", {}).get("strikes"),
+                    "p_throws": play.get("matchup", {}).get("pitcher", {}).get("pitchHand", {}).get("code"),
+                    "home_team": g.get("home_name_abbrev") or g.get("home_team_name"),
+                    "away_team": g.get("away_name_abbrev") or g.get("away_team_name"),
+                    "game_year": int(date_str.split("-")[0]),
+                }
+                rows.append(row)
                 
         except Exception as e:
             print(f"❌ PBP error for game {pk}@{date_str}: {e}")
@@ -77,8 +98,8 @@ def fetch_statsapi_for_date(date_str: str, out_dir: Path):
         print(f"✅ No PBP data for {date_str}")
         return
     
-    # Use json_normalize like the original version
-    df = pd.json_normalize(rows)
+    # Create DataFrame with flattened columns that match the table schema
+    df = pd.DataFrame(rows)
     df.to_parquet(out_file, index=False)
     print(f"✅ StatsAPI: Wrote {len(df)} rows → {out_file.name}")
 

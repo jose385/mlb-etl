@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 load_parquet_into_pg.py – Load everything in a folder of Parquets into Postgres,  
-automatically dropping any DataFrame columns the target table doesn’t have.
+automatically dropping any DataFrame columns the target table doesn't have.
 
 Usage:
     python load_parquet_into_pg.py [--input-dir DIR] [--tables T1 T2 ...]
@@ -12,6 +12,7 @@ Env:
 import os
 import argparse
 import io
+import time
 from pathlib import Path
 
 import pandas as pd
@@ -65,7 +66,8 @@ def load_table(conn, table: str, df: pd.DataFrame):
     cur = conn.cursor()
     
     try:
-        # Create temp table with same structure
+        # Drop temp table if it exists, then create it
+        cur.execute(f"DROP TABLE IF EXISTS {temp_table}")
         cur.execute(f"CREATE TEMP TABLE {temp_table} (LIKE public.{table})")
         
         # Load data into temp table
@@ -82,21 +84,19 @@ def load_table(conn, table: str, df: pd.DataFrame):
         rows_inserted = cur.rowcount
         print(f"✅ Loaded {rows_inserted} new rows → public.{table} ({len(to_load)} cols)")
         
+        # Clean up temp table
+        cur.execute(f"DROP TABLE IF EXISTS {temp_table}")
+        
     except Exception as e:
         print(f"❌ Error loading {table}: {e}")
+        # Clean up on error too
+        try:
+            cur.execute(f"DROP TABLE IF EXISTS {temp_table}")
+        except:
+            pass
         conn.rollback()
         raise
 
-# Add this to your load_parquet_into_pg.py temporarily
-def debug_columns(conn, table: str, df: pd.DataFrame):
-    existing = set(get_table_columns(conn, table))
-    parquet_cols = set(df.columns)
-    
-    print(f"\n🔍 Debug info for {table}:")
-    print(f"   Table expects: {sorted(existing)}")
-    print(f"   Parquet has:   {sorted(parquet_cols)}")
-    print(f"   Missing from parquet: {existing - parquet_cols}")
-    print(f"   Extra in parquet:     {parquet_cols - existing}")
 
 def main():
     p = argparse.ArgumentParser()

@@ -85,7 +85,7 @@ def fetch_statsapi_for_date(date_str: str, out_dir: Path):
 
 def fetch_roster_for_date(date_str: str, output_dir: str):
     """
-    Fetch one day's rosters (home & away) and write to Parquet if new.
+    Fetch one day's rosters using the team_roster endpoint instead of roster()
     """
     out_file = os.path.join(output_dir, f"roster_{date_str}.parquet")
     if os.path.exists(out_file):
@@ -100,49 +100,56 @@ def fetch_roster_for_date(date_str: str, output_dir: str):
         return
     
     rows = []
+    seen = set()  # Avoid duplicate team processing
+    
     for g in games:
         game_pk = g.get("game_id") or g.get("game_pk")
         for team_id, side in ((g["home_id"], "home"), (g["away_id"], "away")):
+            # Skip if we've already processed this team on this date
+            if (date_str, team_id) in seen:
+                continue
+            seen.add((date_str, team_id))
+            
             print(f"🔍 DEBUG: Fetching roster for team {team_id} ({side})")
             
             try:
-                data = statsapi.roster(team_id, date=date_str)
-                print(f"🔍 DEBUG: Roster API returned type: {type(data)}")
+                # Use the team_roster endpoint instead
+                data = statsapi.get("team_roster", {"teamId": team_id, "rosterType": "active"})
+                print(f"🔍 DEBUG: team_roster API returned type: {type(data)}")
                 
-                if hasattr(data, '__len__'):
-                    print(f"🔍 DEBUG: Data length: {len(data)}")
+                if isinstance(data, dict) and "roster" in data:
+                    records = data["roster"]
+                    print(f"🔍 DEBUG: Found {len(records)} roster records for team {team_id}")
+                    
+                    for r in records:
+                        if not isinstance(r, dict):
+                            print(f"⚠️ DEBUG: Skipping non-dict record: {type(r)}")
+                            continue
+                        
+                        # Extract player info from nested structure
+                        person = r.get("person", {})
+                        position = r.get("position", {})
+                        
+                        row = {
+                            "game_date": date_str,
+                            "team_id": team_id,
+                            "person_id": person.get("id"),
+                            "jersey_number": r.get("jerseyNumber"),
+                            "position_code": position.get("code"),
+                            "position_name": position.get("name"),
+                            "status_code": r.get("status", {}).get("code"),
+                            "side": side,
+                            "full_name": person.get("fullName"),
+                        }
+                        rows.append(row)
+                        
                 else:
-                    print(f"🔍 DEBUG: Data content preview: {str(data)[:200]}")
+                    print(f"⚠️ DEBUG: Unexpected team_roster response format for team {team_id}")
+                    print(f"⚠️ DEBUG: Response keys: {list(data.keys()) if isinstance(data, dict) else 'Not a dict'}")
                 
             except Exception as e:
                 print(f"❌ Roster error for team {team_id}@{date_str}: {e}")
                 continue
-
-            # pull out the actual roster list
-            if isinstance(data, dict) and "roster" in data:
-                records = data["roster"]
-                print(f"🔍 DEBUG: Using data['roster'], found {len(records)} records")
-            elif isinstance(data, list):
-                records = data
-                print(f"🔍 DEBUG: Using data directly, found {len(records)} records")
-            else:
-                records = []
-                print(f"⚠️ DEBUG: Unexpected roster data format: {type(data)}")
-                print(f"⚠️ DEBUG: Data sample: {str(data)[:200]}")
-
-            # filter and normalize
-            for r in records:
-                if not isinstance(r, dict):
-                    print(f"⚠️ DEBUG: Skipping non-dict record: {type(r)}")
-                    continue
-
-                row = dict(r)
-                row.update({
-                    "team_id": team_id,
-                    "game_date": date_str,
-                    "side": side
-                })
-                rows.append(row)
 
     print(f"🔍 DEBUG: Total roster records collected: {len(rows)}")
 
@@ -151,6 +158,7 @@ def fetch_roster_for_date(date_str: str, output_dir: str):
         return
 
     df = pd.DataFrame(rows)
+    # Clean column names
     df.columns = [c.replace(".", "_").replace("-", "_").lower() for c in df.columns]
     df.to_parquet(out_file, index=False)
     print(f"✅ Rosters: Wrote {len(df)} rows → {out_file}")

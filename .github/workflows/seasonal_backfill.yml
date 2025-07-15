@@ -49,14 +49,16 @@ jobs:
 
       - name: Create schema & tables
         run: |
-          psql "$PG_DSN" << 'EOF'
-            CREATE SCHEMA IF NOT EXISTS public;
-            \i migrations/001_create_statcast_table.sql
-            \i migrations/002_allow_roster_player_null.sql
-            \i migrations/003_create_statsapi_playlog_table.sql
-            \i migrations/004_create_roster_table.sql
-            \i migrations/005_create_lineup_table.sql
-          EOF
+          # Create schema first
+          psql "$PG_DSN" -c "CREATE SCHEMA IF NOT EXISTS public;"
+    
+          # Run all migration files in order
+          for migration in migrations/*.sql; do
+            if [ -f "$migration" ]; then
+              echo "Running $migration..."
+              psql "$PG_DSN" -f "$migration"
+            fi
+          done
 
       - name: Backfill Statcast, PBP & Rosters and lineupa
         run: |

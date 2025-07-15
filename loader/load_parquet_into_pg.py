@@ -57,10 +57,35 @@ def load_table(conn, table: str, df: pd.DataFrame):
     buf.seek(0)
 
     cols_csv = ", ".join(to_load)
-    copy_sql = f"COPY public.{table} ({cols_csv}) FROM STDIN WITH (FORMAT CSV)"
+    
+    # Create a temporary table first
+    temp_table = f"temp_{table}_{int(time.time())}"
+    copy_sql = f"COPY {temp_table} ({cols_csv}) FROM STDIN WITH (FORMAT CSV)"
+    
     cur = conn.cursor()
-    cur.copy_expert(copy_sql, buf)
-    print(f"✅ Loaded {len(df)} rows → public.{table} ({len(to_load)} cols)")
+    
+    try:
+        # Create temp table with same structure
+        cur.execute(f"CREATE TEMP TABLE {temp_table} (LIKE public.{table})")
+        
+        # Load data into temp table
+        cur.copy_expert(copy_sql, buf)
+        
+        # Insert only new records using ON CONFLICT DO NOTHING
+        all_cols = ", ".join(to_load)
+        cur.execute(f"""
+            INSERT INTO public.{table} ({all_cols})
+            SELECT {all_cols} FROM {temp_table}
+            ON CONFLICT DO NOTHING
+        """)
+        
+        rows_inserted = cur.rowcount
+        print(f"✅ Loaded {rows_inserted} new rows → public.{table} ({len(to_load)} cols)")
+        
+    except Exception as e:
+        print(f"❌ Error loading {table}: {e}")
+        conn.rollback()
+        raise
 
 # Add this to your load_parquet_into_pg.py temporarily
 def debug_columns(conn, table: str, df: pd.DataFrame):

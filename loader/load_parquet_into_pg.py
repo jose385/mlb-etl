@@ -62,6 +62,16 @@ def load_table(conn, table: str, df: pd.DataFrame):
     cur.copy_expert(copy_sql, buf)
     print(f"✅ Loaded {len(df)} rows → public.{table} ({len(to_load)} cols)")
 
+# Add this to your load_parquet_into_pg.py temporarily
+def debug_columns(conn, table: str, df: pd.DataFrame):
+    existing = set(get_table_columns(conn, table))
+    parquet_cols = set(df.columns)
+    
+    print(f"\n🔍 Debug info for {table}:")
+    print(f"   Table expects: {sorted(existing)}")
+    print(f"   Parquet has:   {sorted(parquet_cols)}")
+    print(f"   Missing from parquet: {existing - parquet_cols}")
+    print(f"   Extra in parquet:     {parquet_cols - existing}")
 
 def main():
     p = argparse.ArgumentParser()

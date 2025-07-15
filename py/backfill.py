@@ -41,8 +41,9 @@ def fetch_statcast_for_date(date_str: str, out_dir: Path):
 def fetch_statsapi_for_date(date_str: str, out_dir: Path):
     out_file = out_dir / f"statsapi_{date_str}.parquet"
     if out_file.exists():
-        print(f"⏭️  Skipping StatsAPI for {date_str}")
+        print(f"⏭️ Skipping StatsAPI for {date_str}")
         return
+    
     games = statsapi.schedule(start_date=date_str, end_date=date_str) or []
     rows = []
     for g in games:
@@ -53,13 +54,34 @@ def fetch_statsapi_for_date(date_str: str, out_dir: Path):
             resp = statsapi.get("game_playByPlay", {"gamePk": pk})
             plays = resp.get("allPlays") or resp.get("liveData", {}) \
                          .get("plays", {}).get("allPlays", [])
-            rows.extend(plays)
+            
+            for play in plays:
+                # Flatten the nested structure to match your table schema
+                row = {
+                    "game_date": date_str,
+                    "game_pk": pk,
+                    "at_bat_index": play.get("about", {}).get("atBatIndex"),
+                    "event_index": play.get("about", {}).get("playIndex"), 
+                    "inning": play.get("about", {}).get("inning"),
+                    "half_inning": play.get("about", {}).get("halfInning"),
+                    "pitcher": play.get("matchup", {}).get("pitcher", {}).get("id"),
+                    "batter": play.get("matchup", {}).get("batter", {}).get("id"),
+                    "events": play.get("result", {}).get("event"),
+                    "description": play.get("result", {}).get("description"),
+                    "count_balls": play.get("count", {}).get("balls"),
+                    "count_strikes": play.get("count", {}).get("strikes"),
+                    # Add other fields as needed to match your schema
+                }
+                rows.append(row)
+                
         except Exception as e:
             print(f"❌ PBP error for game {pk}@{date_str}: {e}")
+    
     if not rows:
         print(f"✅ No PBP data for {date_str}")
         return
-    df = pd.json_normalize(rows)
+    
+    df = pd.DataFrame(rows)
     df.to_parquet(out_file, index=False)
     print(f"✅ StatsAPI: Wrote {len(df)} rows → {out_file.name}")
 
@@ -121,16 +143,11 @@ def fetch_roster_for_date(date_str: str, output_dir: str):
 
 
 def fetch_lineup_for_date(date_str: str, output_dir: str):
-    """
-    Fetch one day's starting lineups via the boxscore endpoint
-    and write to Parquet if new.
-    """
     out_file = os.path.join(output_dir, f"lineup_{date_str}.parquet")
     if os.path.exists(out_file):
         print(f"⏭️ Skipping Lineups for {date_str} (already exists)")
         return
 
-    # get list of games
     games = statsapi.schedule(start_date=date_str, end_date=date_str) or []
     rows = []
     for g in games:
@@ -138,20 +155,21 @@ def fetch_lineup_for_date(date_str: str, output_dir: str):
         if not game_pk:
             continue
         try:
-            # note: this is the boxscore endpoint, not preview
             data = statsapi.get("game_boxscore", {"gamePk": game_pk})
             teams = data.get("teams", {})
             for side in ("home", "away"):
                 team_info = teams.get(side, {})
+                team_id = g.get("home_id" if side == "home" else "away_id")
                 batters = team_info.get("batters", [])
-                for player_idx, pid in enumerate(batters, start=1):
-                    # each pid is a numeric player ID
+                for batting_order, person_id in enumerate(batters, start=1):
                     rows.append({
                         "game_date": date_str,
                         "game_pk": game_pk,
-                        "team_side": side,
-                        "slot": player_idx,
-                        "player_id": pid,
+                        "team_id": team_id,           # ✅ Added
+                        "batting_order": batting_order, # ✅ Fixed name
+                        "person_id": person_id,        # ✅ Fixed name
+                        "position_code": None,         # ✅ Added (you'll need to get this from API)
+                        "side": side,                  # ✅ Fixed name
                     })
         except Exception as e:
             print(f"❌ Lineup error for game {game_pk}@{date_str}: {e}")

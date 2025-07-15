@@ -1,4 +1,4 @@
-ha#!/usr/bin/env python
+#!/usr/bin/env python
 
 """
 backfill.py – Historical backfill for Statcast, StatsAPI PBP, Rosters, and Lineups.

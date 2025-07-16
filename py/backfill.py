@@ -52,7 +52,6 @@ def fetch_statsapi_for_date(date_str: str, out_dir: Path):
         return
     
     rows = []
-    filtered_count = 0
     
     for g in games:
         pk = g.get("game_id") or g.get("game_pk")
@@ -68,57 +67,76 @@ def fetch_statsapi_for_date(date_str: str, out_dir: Path):
             
             print(f"🔍 DEBUG: Found {len(plays)} plays for game {pk}")
             
-            for play in plays:
-                # Get the required fields
-                at_bat_index = play.get("about", {}).get("atBatIndex")
-                event_index = play.get("about", {}).get("playIndex")
+            # Debug: Look at the first play to understand the structure
+            if plays:
+                first_play = plays[0]
+                print(f"🔍 DEBUG: First play structure for game {pk}:")
+                print(f"   about keys: {list(first_play.get('about', {}).keys())}")
+                print(f"   about content: {first_play.get('about', {})}")
                 
-                # Skip records with missing required primary key fields
-                if at_bat_index is None or event_index is None:
-                    filtered_count += 1
-                    continue
-                
-                # Extract all the data that matches your table schema
-                row = {
-                    "game_date": date_str,
-                    "game_pk": pk,
-                    "at_bat_index": at_bat_index,
-                    "event_index": event_index, 
-                    "inning": play.get("about", {}).get("inning"),
-                    "half_inning": play.get("about", {}).get("halfInning"),
-                    "pitcher": play.get("matchup", {}).get("pitcher", {}).get("id"),
-                    "batter": play.get("matchup", {}).get("batter", {}).get("id"),
-                    "events": play.get("result", {}).get("event"),
-                    "description": play.get("result", {}).get("description"),
-                    "count_balls": play.get("count", {}).get("balls"),
-                    "count_strikes": play.get("count", {}).get("strikes"),
+                # Only process first few plays to avoid spam, but get the structure right
+                for i, play in enumerate(plays[:3]):  # Just first 3 plays for debugging
                     
-                    # Add the missing columns that your table expects
-                    "play_end_time": play.get("about", {}).get("endTime"),
-                    "p_throws": play.get("matchup", {}).get("pitcher", {}).get("pitchHand", {}).get("code"),
-                    "home_team": g.get("home_name_abbrev") or g.get("home_team_name"),
-                    "away_team": g.get("away_name_abbrev") or g.get("away_team_name"),
-                    "batted_ball_type": play.get("result", {}).get("type"),
-                    "hit_location": play.get("hitData", {}).get("location"),
-                    "bb_type": play.get("hitData", {}).get("trajectory"),
-                    "game_year": int(date_str.split("-")[0]),
-                    "plate_x": play.get("pitchData", {}).get("coordinates", {}).get("pX"),
-                    "plate_z": play.get("pitchData", {}).get("coordinates", {}).get("pZ"),
-                }
-                rows.append(row)
+                    # Try different possible field names
+                    at_bat_index = (play.get("about", {}).get("atBatIndex") or 
+                                  play.get("about", {}).get("at_bat_index") or
+                                  play.get("about", {}).get("atBatNumber") or
+                                  play.get("atBatIndex") or
+                                  i)  # Use index as fallback
+                    
+                    event_index = (play.get("about", {}).get("playIndex") or
+                                 play.get("about", {}).get("event_index") or  
+                                 play.get("about", {}).get("playEndTime") or
+                                 play.get("playIndex") or
+                                 i)  # Use index as fallback
+                    
+                    print(f"🔍 DEBUG: Play {i}: at_bat_index={at_bat_index}, event_index={event_index}")
+                    
+                    # Extract data with fallbacks
+                    row = {
+                        "game_date": date_str,
+                        "game_pk": pk,
+                        "at_bat_index": at_bat_index,
+                        "event_index": event_index, 
+                        "inning": play.get("about", {}).get("inning"),
+                        "half_inning": play.get("about", {}).get("halfInning"),
+                        "pitcher": play.get("matchup", {}).get("pitcher", {}).get("id"),
+                        "batter": play.get("matchup", {}).get("batter", {}).get("id"),
+                        "events": play.get("result", {}).get("event"),
+                        "description": play.get("result", {}).get("description"),
+                        "count_balls": play.get("count", {}).get("balls"),
+                        "count_strikes": play.get("count", {}).get("strikes"),
+                        "play_end_time": play.get("about", {}).get("endTime"),
+                        "p_throws": play.get("matchup", {}).get("pitcher", {}).get("pitchHand", {}).get("code"),
+                        "home_team": g.get("home_name_abbrev") or g.get("home_team_name"),
+                        "away_team": g.get("away_name_abbrev") or g.get("away_team_name"),
+                        "batted_ball_type": play.get("result", {}).get("type"),
+                        "hit_location": play.get("hitData", {}).get("location"),
+                        "bb_type": play.get("hitData", {}).get("trajectory"),
+                        "game_year": int(date_str.split("-")[0]),
+                        "plate_x": play.get("pitchData", {}).get("coordinates", {}).get("pX"),
+                        "plate_z": play.get("pitchData", {}).get("coordinates", {}).get("pZ"),
+                    }
+                    rows.append(row)
+                
+                # Exit after first game for debugging
+                break
                 
         except Exception as e:
             print(f"❌ PBP error for game {pk}@{date_str}: {e}")
     
-    print(f"🔍 DEBUG: Filtered out {filtered_count} plays due to missing at_bat_index/event_index")
     print(f"🔍 DEBUG: Total rows collected: {len(rows)}")
     
     if not rows:
         print(f"✅ No PBP data for {date_str}")
         return
     
-    # Create DataFrame with all expected columns
+    # Create DataFrame
     df = pd.DataFrame(rows)
+    print(f"🔍 DEBUG: DataFrame columns: {list(df.columns)}")
+    print(f"🔍 DEBUG: Sample data:")
+    print(df.head(2))
+    
     df.to_parquet(out_file, index=False)
     print(f"✅ StatsAPI: Wrote {len(df)} rows → {out_file.name}")
 

@@ -109,24 +109,6 @@ def debug_columns(conn, table: str, df: pd.DataFrame):
     print(f"   Missing from parquet: {existing - parquet_cols}")
     print(f"   Extra in parquet:     {parquet_cols - existing}")
     
-# Then modify your main() function to call this:
-def main():
-    # ... existing code ...
-    
-    conn = connect()
-    for pq in files:
-        stem = pq.stem
-        base = stem.split("_", 1)[0]
-        table = "statsapi_playlog" if base == "statsapi" else base.rstrip("s")
-        print(f"⏳ {pq.name} → public.{table} …", end=" ")
-        df = pd.read_parquet(pq)
-        
-        # Add debug for statsapi files
-        if table == "statsapi_playlog":
-            debug_columns(conn, table, df)
-        
-        load_table(conn, table, df)
-
 def main():
     p = argparse.ArgumentParser()
     p.add_argument(

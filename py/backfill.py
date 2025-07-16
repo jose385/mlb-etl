@@ -45,21 +45,28 @@ def fetch_statsapi_for_date(date_str: str, out_dir: Path):
         return
     
     games = statsapi.schedule(start_date=date_str, end_date=date_str) or []
+    print(f"🔍 DEBUG: Found {len(games)} games for {date_str}")
     
     if not games:
         print(f"✅ No games scheduled for {date_str}")
         return
     
     rows = []
+    filtered_count = 0
+    
     for g in games:
         pk = g.get("game_id") or g.get("game_pk")
         if not pk:
             continue
         
+        print(f"🔍 DEBUG: Processing game {pk}")
+        
         try:
             resp = statsapi.get("game_playByPlay", {"gamePk": pk})
             plays = resp.get("allPlays") or resp.get("liveData", {}) \
                          .get("plays", {}).get("allPlays", [])
+            
+            print(f"🔍 DEBUG: Found {len(plays)} plays for game {pk}")
             
             for play in plays:
                 # Get the required fields
@@ -68,6 +75,7 @@ def fetch_statsapi_for_date(date_str: str, out_dir: Path):
                 
                 # Skip records with missing required primary key fields
                 if at_bat_index is None or event_index is None:
+                    filtered_count += 1
                     continue
                 
                 # Extract all the data that matches your table schema
@@ -101,6 +109,9 @@ def fetch_statsapi_for_date(date_str: str, out_dir: Path):
                 
         except Exception as e:
             print(f"❌ PBP error for game {pk}@{date_str}: {e}")
+    
+    print(f"🔍 DEBUG: Filtered out {filtered_count} plays due to missing at_bat_index/event_index")
+    print(f"🔍 DEBUG: Total rows collected: {len(rows)}")
     
     if not rows:
         print(f"✅ No PBP data for {date_str}")

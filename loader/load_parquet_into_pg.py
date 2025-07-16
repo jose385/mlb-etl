@@ -98,6 +98,35 @@ def load_table(conn, table: str, df: pd.DataFrame):
         raise
 
 
+# Add this function to your load_parquet_into_pg.py temporarily
+def debug_columns(conn, table: str, df: pd.DataFrame):
+    existing = set(get_table_columns(conn, table))
+    parquet_cols = set(df.columns)
+    
+    print(f"\n🔍 DEBUG COLUMN MISMATCH for {table}:")
+    print(f"   Table expects: {sorted(existing)}")
+    print(f"   Parquet has:   {sorted(parquet_cols)}")
+    print(f"   Missing from parquet: {existing - parquet_cols}")
+    print(f"   Extra in parquet:     {parquet_cols - existing}")
+    
+# Then modify your main() function to call this:
+def main():
+    # ... existing code ...
+    
+    conn = connect()
+    for pq in files:
+        stem = pq.stem
+        base = stem.split("_", 1)[0]
+        table = "statsapi_playlog" if base == "statsapi" else base.rstrip("s")
+        print(f"⏳ {pq.name} → public.{table} …", end=" ")
+        df = pd.read_parquet(pq)
+        
+        # Add debug for statsapi files
+        if table == "statsapi_playlog":
+            debug_columns(conn, table, df)
+        
+        load_table(conn, table, df)
+
 def main():
     p = argparse.ArgumentParser()
     p.add_argument(
@@ -139,6 +168,11 @@ def main():
         table = "statsapi_playlog" if base == "statsapi" else base.rstrip("s")
         print(f"⏳ {pq.name} → public.{table} …", end=" ")
         df = pd.read_parquet(pq)
+        
+        # Add debug for statsapi files
+        if table == "statsapi_playlog":
+            debug_columns(conn, table, df)
+        
         load_table(conn, table, df)
 
     conn.close()

@@ -162,6 +162,11 @@ def main():
         nargs="*",
         help="Optional subset of basenames to load: e.g. statcast statsapi_playlog roster lineup"
     )
+    p.add_argument(
+        "--validate",
+        action="store_true",
+        help="Run data quality validation"
+    )
     args = p.parse_args()
 
     in_dir = Path(args.input_dir)

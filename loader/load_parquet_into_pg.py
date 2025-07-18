@@ -97,6 +97,47 @@ def load_table(conn, table: str, df: pd.DataFrame):
         conn.rollback()
         raise
 
+#!/usr/bin/env python3
+"""
+Quick enhanced loader - simple addition to your existing loader
+Just add this function to your current load_parquet_into_pg.py
+"""
+
+def enhanced_load_table(conn, table: str, df: pd.DataFrame):
+    """Enhanced version that handles missing columns automatically"""
+    
+    # Get existing table columns
+    existing = set(get_table_columns(conn, table))
+    parquet_cols = set(df.columns)
+    
+    # Find new columns that don't exist in table
+    new_cols = parquet_cols - existing
+    
+    if new_cols:
+        print(f"🆕 Found {len(new_cols)} new columns in {table}")
+        
+        # Add new columns to table
+        cur = conn.cursor()
+        for col in sorted(new_cols):
+            # Determine type from pandas dtype
+            sample_vals = df[col].dropna().head(100)
+            
+            if df[col].dtype == 'object':
+                pg_type = 'TEXT'
+            elif 'int' in str(df[col].dtype):
+                pg_type = 'BIGINT'
+            elif 'float' in str(df[col].dtype):
+                pg_type = 'REAL'
+            elif 'bool' in str(df[col].dtype):
+                pg_type = 'BOOLEAN'
+            else:
+                pg_type = 'TEXT'
+            
+            try:
+                cur.execute(f"ALTER TABLE public.{table} ADD COLUMN {col} {pg_type}")
+                print(f"  ✅ Added column: {col} ({pg_type})")
+            except Exception as e:
+                print(f"  ⚠️  Could not add column {col}: {e}")
 
 # Add this function to your load_parquet_into_pg.py temporarily
 def debug_columns(conn, table: str, df: pd.DataFrame):
@@ -155,7 +196,7 @@ def main():
         if table == "statsapi_playlog":
             debug_columns(conn, table, df)
         
-        load_table(conn, table, df)
+        enhanced_load_table(conn, table, df)
 
     conn.close()
     print("🎉 All done!")

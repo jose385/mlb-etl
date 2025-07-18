@@ -1,0 +1,58 @@
+# ==============================================================================
+# FILE 5: setup_weather.sh (Setup script)
+# ==============================================================================
+
+#!/bin/bash
+# Save this as setup_weather.sh and run: chmod +x setup_weather.sh && ./setup_weather.sh
+
+echo "🌤️ Setting up MLB Weather Integration..."
+
+# Check if OpenWeather API key is set
+if [ -z "$OPENWEATHER_API_KEY" ]; then
+    echo "❌ OPENWEATHER_API_KEY not set!"
+    echo "1. Go to: https://openweathermap.org/api"
+    echo "2. Sign up for free account"
+    echo "3. Get your API key"
+    echo "4. Run: export OPENWEATHER_API_KEY='your_key_here'"
+    exit 1
+fi
+
+echo "✅ API key found: ${OPENWEATHER_API_KEY:0:8}..."
+
+# Create weather migration if it doesn't exist
+if [ ! -f "migrations/006_create_weather_table.sql" ]; then
+    echo "❌ Weather migration file not found!"
+    echo "Create migrations/006_create_weather_table.sql with the SQL above"
+    exit 1
+fi
+
+# Run weather migration
+echo "🔄 Running weather table migration..."
+psql "$PG_DSN" -f migrations/006_create_weather_table.sql
+
+if [ $? -eq 0 ]; then
+    echo "✅ Weather table created successfully"
+else
+    echo "❌ Migration failed - check your PG_DSN"
+    exit 1
+fi
+
+# Test weather integration
+echo "🧪 Testing weather integration..."
+python py/weather_integration.py --date 2024-04-15 --output test_weather
+
+if [ $? -eq 0 ]; then
+    echo "✅ Weather integration test passed"
+    rm -rf test_weather/
+else
+    echo "❌ Weather test failed"
+    exit 1
+fi
+
+echo "🎉 Weather integration setup complete!"
+echo ""
+echo "Next steps:"
+echo "1. Test backfill: python py/backfill.py --start 2024-04-15 --end 2024-04-15"
+echo "2. Check weather file: ls stage/weather_*.parquet"
+echo "3. Load data: python loader/load_parquet_into_pg.py --input-dir stage"
+echo "4. Verify: psql \"\$PG_DSN\" -c \"SELECT COUNT(*) FROM weather;\""

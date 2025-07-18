@@ -25,6 +25,8 @@ from pybaseball import statcast
 import statsapi
 from tqdm import tqdm
 
+from weather_integration import fetch_weather_for_date
+
 
 def clean_column_name(col_name: str) -> str:
     """Clean column names for database compatibility"""
@@ -416,6 +418,13 @@ def main():
         while d <= ed:
             ds = d.strftime("%Y-%m-%d")
             print(f"\n📅 Processing {ds}...")
+
+            # Fetch weather data first
+            weather_api_key = os.getenv("OPENWEATHER_API_KEY")
+            if weather_api_key:
+                fetch_weather_for_date(ds, out_dir, weather_api_key)
+            else:
+                print(f"⚠️  No OPENWEATHER_API_KEY set - skipping weather for {ds}")
             
             fetch_statcast_for_date(ds, out_dir)
             fetch_statsapi_for_date(ds, out_dir)

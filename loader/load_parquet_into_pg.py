@@ -181,6 +181,15 @@ def main():
         def matches(f):
             stem = f.stem
             base = stem.split("_", 1)[0]
+            # Add weather handling
+            if base == "weather":
+                tbl = "weather"
+            elif base == "statsapi":
+                tbl = "statsapi_playlog" 
+            else:
+                tbl = base.rstrip("s")
+    
+            return tbl in keep
             # statsapi files are named statsapi_YYYY-MM-DD.parquet but table is statsapi_playlog
             tbl = "statsapi_playlog" if base == "statsapi" else base.rstrip("s")
             return tbl in keep

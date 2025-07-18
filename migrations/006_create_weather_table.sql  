@@ -1,9 +1,5 @@
-# ==============================================================================
-# FILE 2: migrations/006_create_weather_table.sql  
-# ==============================================================================
-
+-- migrations/006_create_weather_table.sql
 -- Weather data table for comprehensive game conditions
--- Save this as migrations/006_create_weather_table.sql
 
 CREATE TABLE IF NOT EXISTS public.weather (
   -- Game identifiers

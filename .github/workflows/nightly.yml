@@ -1,44 +1,171 @@
+# .github/workflows/nightly.yml - FIXED VERSION
 name: MLB Nightly ETL
 
 on:
-
   schedule:
-
-    - cron: '5 4 * * *'  # 00:05 ET
-
-  workflow_dispatch:
-
+    - cron: '5 4 * * *'  # 00:05 ET (after games are final)
+  workflow_dispatch:      # Manual trigger option
+    inputs:
+      date:
+        description: 'Date to process (YYYY-MM-DD) - defaults to yesterday'
+        required: false
+        type: string
+      days_back:
+        description: 'Number of days back to process (default: 1)'
+        required: false
+        type: string
+        default: '1'
 
 jobs:
-  backfill:
+  nightly_etl:
     runs-on: ubuntu-latest
+    
+    # Add PostgreSQL service for loading data
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_DB: mydb
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres -d mydb"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    
     env:
       PG_DSN: postgresql://postgres:postgres@localhost:5432/mydb
       OUTPUT_DIR: stage
+    
     steps:
       - uses: actions/checkout@v4
 
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: 3.12
+          python-version: '3.12'
 
       - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r py/requirements.txt
 
-      - name: Backfill Statcast, PBP & Rosters
+      - name: Calculate Date Range
+        id: dates
         run: |
-          START="${{ github.event.inputs.season }}-04-01"
-          END="${{ github.event.inputs.season }}-05-03"
-          MONTHLY_FLAG=""
-          if [ "${{ github.event.inputs.monthly }}" = "true" ]; then
-            MONTHLY_FLAG="--monthly"
+          if [ "${{ github.event.inputs.date }}" != "" ]; then
+            # Manual trigger - use provided date
+            TARGET_DATE="${{ github.event.inputs.date }}"
+          else
+            # Scheduled run - use yesterday (games are final by 4 AM ET)
+            TARGET_DATE=$(date -d "yesterday" +%Y-%m-%d)
+          fi
+          
+          DAYS_BACK="${{ github.event.inputs.days_back || '1' }}"
+          
+          if [ "$DAYS_BACK" = "1" ]; then
+            START_DATE="$TARGET_DATE"
+            END_DATE="$TARGET_DATE"
+          else
+            START_DATE=$(date -d "$TARGET_DATE - $((DAYS_BACK - 1)) days" +%Y-%m-%d)
+            END_DATE="$TARGET_DATE"
+          fi
+          
+          echo "start_date=$START_DATE" >> $GITHUB_OUTPUT
+          echo "end_date=$END_DATE" >> $GITHUB_OUTPUT
+          echo "🎯 Processing MLB data for: $START_DATE to $END_DATE"
+
+      - name: Run Schema Migrations
+        run: |
+          # Ensure database schema is up to date
+          psql "$PG_DSN" -c "CREATE SCHEMA IF NOT EXISTS public;"
+          
+          # Run migrations if they exist
+          if [ -d "migrations" ]; then
+            for migration in migrations/*.sql; do
+              if [ -f "$migration" ]; then
+                echo "Running $migration..."
+                psql "$PG_DSN" -f "$migration"
+              fi
+            done
           fi
 
-          python py/backfill.py --start "$START" --end "$END" $MONTHLY_FLAG
-      - name: Load Parquet into Postgres
+      - name: Fetch MLB Data (Statcast, PBP, Rosters, Lineups)
         run: |
-          python3 loader/load_parquet_into_pg.py --stage stage
+          echo "🔄 Starting MLB data collection..."
+          python py/backfill.py \
+            --start "${{ steps.dates.outputs.start_date }}" \
+            --end "${{ steps.dates.outputs.end_date }}" \
+            --output stage
+          
+          echo "📊 Data collection complete!"
+          
+          # Show what was collected
+          if [ -d "stage" ]; then
+            echo "📁 Files created:"
+            ls -lah stage/ | grep -E "\.(parquet)$" || echo "No parquet files found"
+          fi
 
+      - name: Load Data into PostgreSQL
+        run: |
+          echo "📥 Loading data into PostgreSQL..."
+          python loader/load_parquet_into_pg.py \
+            --input-dir stage \
+            --tables statcast statsapi_playlog roster lineup
+          
+          echo "✅ Data loading complete!"
+
+      - name: Data Quality Checks
+        run: |
+          echo "🔍 Running data quality checks..."
+          
+          # Check record counts
+          echo "📊 Record counts by table:"
+          psql "$PG_DSN" -c "
+            SELECT 'statcast' as table_name, COUNT(*) as records 
+            FROM statcast 
+            WHERE game_date = '${{ steps.dates.outputs.start_date }}'
+            UNION ALL
+            SELECT 'statsapi_playlog' as table_name, COUNT(*) as records 
+            FROM statsapi_playlog 
+            WHERE game_date = '${{ steps.dates.outputs.start_date }}'
+            UNION ALL
+            SELECT 'roster' as table_name, COUNT(*) as records 
+            FROM roster 
+            WHERE game_date = '${{ steps.dates.outputs.start_date }}'
+            UNION ALL
+            SELECT 'lineup' as table_name, COUNT(*) as records 
+            FROM lineup 
+            WHERE game_date = '${{ steps.dates.outputs.start_date }}';
+          "
+          
+          # Check for games on the target date
+          GAME_COUNT=$(psql "$PG_DSN" -t -c "
+            SELECT COUNT(DISTINCT game_pk) 
+            FROM statcast 
+            WHERE game_date = '${{ steps.dates.outputs.start_date }}';
+          " | tr -d ' ')
+          
+          echo "🎲 Games processed: $GAME_COUNT"
+          
+          if [ "$GAME_COUNT" -eq 0 ]; then
+            echo "ℹ️  No games found for ${{ steps.dates.outputs.start_date }} - this is normal for off days"
+          else
+            echo "✅ Successfully processed $GAME_COUNT games"
+          fi
+
+      - name: Cleanup Staging Files
+        run: |
+          # Clean up parquet files to save space (data is now in PostgreSQL)
+          if [ -d "stage" ]; then
+            echo "🧹 Cleaning up staging files..."
+            rm -rf stage/*.parquet
+          fi
+
+      - name: Send Notification (Optional)
+        if: failure()
+        run: |
+          echo "❌ Nightly ETL failed for ${{ steps.dates.outputs.start_date }}"
+          # Add Slack/email notification here if desired

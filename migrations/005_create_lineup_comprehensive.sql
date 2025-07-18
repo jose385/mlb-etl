@@ -1,5 +1,5 @@
 -- migrations/005_create_lineup_comprehensive.sql
--- Comprehensive lineup table with full player details and game context
+-- Fixed lineup table with corrected indexes
 
 CREATE TABLE IF NOT EXISTS public.lineup (
   -- Core identifiers
@@ -59,7 +59,7 @@ CREATE TABLE IF NOT EXISTS public.lineup (
   person_strike_zone_top   REAL,
   person_strike_zone_bottom REAL,
   
-  -- Game-specific stats (from stats object if available)
+  -- Game-specific batting stats (from stats object if available)
   stats_batting_games_played        INTEGER,
   stats_batting_ground_outs         INTEGER,
   stats_batting_air_outs            INTEGER,
@@ -93,7 +93,7 @@ CREATE TABLE IF NOT EXISTS public.lineup (
   stats_batting_catchers_interference INTEGER,
   stats_batting_at_bats_per_home_run REAL,
   
-  -- Pitching stats (for pitchers)
+  -- Pitching stats (for pitchers in lineup)
   stats_pitching_games_played       INTEGER,
   stats_pitching_games_started      INTEGER,
   stats_pitching_ground_outs        INTEGER,
@@ -166,12 +166,10 @@ CREATE TABLE IF NOT EXISTS public.lineup (
   stats_team_id                     INTEGER,
   stats_team_name                   TEXT,
   
-  -- Additional fields that may be added dynamically
-  
   PRIMARY KEY (game_pk, team_id, batting_order)
 );
 
--- Indexes for lineup data
+-- Basic indexes (no conditional WHERE clauses that could cause issues)
 CREATE INDEX IF NOT EXISTS idx_lineup_game_date ON public.lineup(game_date);
 CREATE INDEX IF NOT EXISTS idx_lineup_game_pk ON public.lineup(game_pk);
 CREATE INDEX IF NOT EXISTS idx_lineup_team_id ON public.lineup(team_id);
@@ -182,7 +180,4 @@ CREATE INDEX IF NOT EXISTS idx_lineup_side ON public.lineup(side);
 
 -- Composite indexes for analysis
 CREATE INDEX IF NOT EXISTS idx_lineup_team_order ON public.lineup(team_id, batting_order);
-CREATE INDEX IF NOT EXISTS idx_lineup_player_stats ON public.lineup(person_id, stats_batting_avg, stats_batting_ops) 
-  WHERE stats_batting_avg IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_lineup_handedness ON public.lineup(person_bat_side_code, person_pitch_hand_code);
 CREATE INDEX IF NOT EXISTS idx_lineup_game_team ON public.lineup(game_pk, team_id, side);

@@ -184,12 +184,14 @@ def main():
             # Add weather handling
             if base == "weather":
                 tbl = "weather"
+            elif base == "fatigue":
+                tbl = "fatigue_metrics"
             elif base == "statsapi":
                 tbl = "statsapi_playlog" 
             else:
                 tbl = base.rstrip("s")
     
-            return tbl in keep
+            return tbl in keep if args.tables else True
             # statsapi files are named statsapi_YYYY-MM-DD.parquet but table is statsapi_playlog
             tbl = "statsapi_playlog" if base == "statsapi" else base.rstrip("s")
             return tbl in keep

@@ -26,6 +26,7 @@ import statsapi
 from tqdm import tqdm
 
 from weather_integration import fetch_weather_for_date
+from fatigue_metrics import fetch_fatigue_metrics_for_date
 
 
 def clean_column_name(col_name: str) -> str:
@@ -448,6 +449,9 @@ def main():
             fetch_statsapi_for_date(ds, out_dir)
             fetch_roster_for_date(ds, out_dir)
             fetch_lineup_for_date(ds, out_dir)
+
+            # 3. Fatigue metrics LAST (needs other data to calculate)
+            fetch_fatigue_metrics_for_date(ds, out_dir)
             
             d += timedelta(days=1)
 

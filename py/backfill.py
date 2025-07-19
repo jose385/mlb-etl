@@ -94,6 +94,22 @@ def log_schema_info(df: pd.DataFrame, data_type: str, date_str: str):
     with open(schema_file, 'w') as f:
         json.dump(schema_info, f, indent=2)
 
+def should_collect_weather(date_str: str) -> bool:
+    """Determine if we should collect weather for this date"""
+    target_date = datetime.fromisoformat(date_str)
+    today = datetime.now()
+    
+    # Only collect weather for dates within the last 5 days
+    # (when current weather is somewhat representative)
+    days_ago = (today - target_date).days
+    
+    if days_ago <= 5:
+        return True
+    else:
+        print(f"⏭️ Skipping weather for {date_str} (historical date, current weather not representative)")
+        return False
+
+
 
 def fetch_statcast_for_date(date_str: str, out_dir: Path):
     """Fetch ALL Statcast columns - completely dynamic"""
@@ -421,10 +437,12 @@ def main():
 
             # Fetch weather data first
             weather_api_key = os.getenv("OPENWEATHER_API_KEY")
-            if weather_api_key:
+            if weather_api_key and should_collect_weather(ds):
                 fetch_weather_for_date(ds, out_dir, weather_api_key)
+            elif weather_api_key:
+                print(f"⏭️ Skipping weather for {ds} (too old for current weather API)")
             else:
-                print(f"⚠️  No OPENWEATHER_API_KEY set - skipping weather for {ds}")
+                print(f"⚠️ No OPENWEATHER_API_KEY set - skipping weather for {ds}")
             
             fetch_statcast_for_date(ds, out_dir)
             fetch_statsapi_for_date(ds, out_dir)

@@ -8,7 +8,7 @@ import os
 import psycopg2
 from datetime import datetime
 from py.enhanced_umpire_betting import get_todays_umpire_betting_analysis, print_umpire_betting_report
-from weather_park_betting import get_todays_weather_park_analysis, print_weather_park_betting_report
+from py.weather_park_betting import get_todays_weather_park_analysis, print_weather_park_betting_report
 
 def get_complete_betting_analysis(conn, game_date: str = None) -> dict:
     """Get complete betting analysis combining all factors"""

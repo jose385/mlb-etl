@@ -27,6 +27,7 @@ from tqdm import tqdm
 
 from weather_integration import fetch_weather_for_date
 from fatigue_metrics import fetch_fatigue_metrics_for_date
+from umpire_integration import fetch_umpire_assignments_for_date
 
 
 def clean_column_name(col_name: str) -> str:
@@ -436,7 +437,7 @@ def main():
             ds = d.strftime("%Y-%m-%d")
             print(f"\n📅 Processing {ds}...")
 
-            # Fetch weather data first
+            # 1. Fetch weather data first
             weather_api_key = os.getenv("OPENWEATHER_API_KEY")
             if weather_api_key and should_collect_weather(ds):
                 fetch_weather_for_date(ds, out_dir, weather_api_key)
@@ -445,12 +446,16 @@ def main():
             else:
                 print(f"⚠️ No OPENWEATHER_API_KEY set - skipping weather for {ds}")
             
+            # 2. Fetch core baseball data
             fetch_statcast_for_date(ds, out_dir)
             fetch_statsapi_for_date(ds, out_dir)
             fetch_roster_for_date(ds, out_dir)
             fetch_lineup_for_date(ds, out_dir)
 
-            # 3. Fatigue metrics LAST (needs other data to calculate)
+            # 3. Fetch umpire assignments (NEW!)
+            fetch_umpire_assignments_for_date(ds, out_dir)
+
+            # 4. Fatigue metrics LAST (needs other data to calculate)
             fetch_fatigue_metrics_for_date(ds, out_dir)
             
             d += timedelta(days=1)
@@ -461,7 +466,11 @@ def main():
     print(f"   • StatsAPI: 50+ columns (vs ~20 in basic version)")
     print(f"   • Roster: 30+ columns (vs ~7 in basic version)")
     print(f"   • Lineup: 40+ columns (vs ~7 in basic version)")
+    print(f"   • Umpires: 25+ columns (NEW - critical for totals betting)")
+    print(f"   • Weather: 15+ columns (air density, wind components)")
+    print(f"   • Fatigue: 20+ columns (player rest and workload)")
     print(f"\n💡 Run with --compare-schemas to see what new columns were discovered")
+
 
 
 if __name__ == "__main__":

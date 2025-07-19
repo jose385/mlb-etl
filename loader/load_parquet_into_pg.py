@@ -181,15 +181,20 @@ def main():
         def matches(f):
             stem = f.stem
             base = stem.split("_", 1)[0]
-            # Add weather handling
-            if base == "weather":
-                tbl = "weather"
-            elif base == "fatigue":
-                tbl = "fatigue_metrics"
-            elif base == "statsapi":
-                tbl = "statsapi_playlog" 
+    
+            # Map file prefixes to table names
+            table_mapping = {
+                "weather": "weather",
+                "fatigue": "fatigue_metrics", 
+                "statsapi": "statsapi_playlog",
+                "umpire": "umpires",  # NEW: Handle umpire files
+                "umpires": "umpires"  # Handle both singular and plural
+            } 
+    
+            if base in table_mapping:
+                tbl = table_mapping[base]
             else:
-                tbl = base.rstrip("s")
+                tbl = base.rstrip("s")  # Default: remove trailing 's'
     
             return tbl in keep if args.tables else True
             # statsapi files are named statsapi_YYYY-MM-DD.parquet but table is statsapi_playlog
@@ -204,12 +209,24 @@ def main():
     for pq in files:
         stem = pq.stem
         base = stem.split("_", 1)[0]
-        table = "statsapi_playlog" if base == "statsapi" else base.rstrip("s")
+        
+        # Enhanced table mapping
+        if base == "statsapi":
+            table = "statsapi_playlog"
+        elif base == "fatigue":
+            table = "fatigue_metrics"
+        elif base == "weather":
+            table = "weather"
+        elif base in ["umpire", "umpires"]:  # NEW: Handle umpire files
+            table = "umpires"
+        else:
+            table = base.rstrip("s")
+        
         print(f"⏳ {pq.name} → public.{table} …", end=" ")
         df = pd.read_parquet(pq)
         
-        # Add debug for statsapi files
-        if table == "statsapi_playlog":
+        # Add debug for new tables
+        if table in ["umpires", "statsapi_playlog"]:
             debug_columns(conn, table, df)
         
         enhanced_load_table(conn, table, df)

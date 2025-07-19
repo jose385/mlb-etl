@@ -113,7 +113,7 @@ jobs:
           echo "📥 Loading data into PostgreSQL..."
           python loader/load_parquet_into_pg.py \
             --input-dir stage \
-            --tables statcast statsapi_playlog roster lineup
+            --tables statcast statsapi_playlog roster lineup umpires weather fatigue_metrics
           
           echo "✅ Data loading complete!"
 
@@ -138,8 +138,22 @@ jobs:
             UNION ALL
             SELECT 'lineup' as table_name, COUNT(*) as records 
             FROM lineup 
+            WHERE game_date = '${{ steps.dates.outputs.start_date }}'
+            UNION ALL
+            SELECT 'umpires' as table_name, COUNT(*) as records 
+            FROM umpires 
             WHERE game_date = '${{ steps.dates.outputs.start_date }}';
           "
+          
+          # Check for home plate umpires (critical for betting)
+          HOME_PLATE_UMPS=$(psql "$PG_DSN" -t -c "
+            SELECT COUNT(*) 
+            FROM umpires 
+            WHERE game_date = '${{ steps.dates.outputs.start_date }}'
+            AND position = 'Home Plate';
+          " | tr -d ' ')
+          
+          echo "👨‍⚖️ Home plate umpires found: $HOME_PLATE_UMPS"
           
           # Check for games on the target date
           GAME_COUNT=$(psql "$PG_DSN" -t -c "
@@ -154,6 +168,13 @@ jobs:
             echo "ℹ️  No games found for ${{ steps.dates.outputs.start_date }} - this is normal for off days"
           else
             echo "✅ Successfully processed $GAME_COUNT games"
+            
+            # Validate umpire data quality
+            if [ "$HOME_PLATE_UMPS" -lt "$GAME_COUNT" ]; then
+              echo "⚠️  Warning: Found fewer home plate umpires ($HOME_PLATE_UMPS) than games ($GAME_COUNT)"
+            else
+              echo "✅ Umpire data collection looks good"
+            fi
           fi
 
       - name: Cleanup Staging Files

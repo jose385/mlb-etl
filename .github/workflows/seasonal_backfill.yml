@@ -70,12 +70,13 @@ jobs:
             --monthly \
             --output stage
 
-      - name: Load Parquet into Postgres
-        env:    
-          PG_DSN: postgresql://postgres:postgres@localhost:5432/mydb
+      - name: Load Data into PostgreSQL
         run: |
-          python3 loader/load_parquet_into_pg.py \
+          echo "📥 Loading data into PostgreSQL..."
+          python loader/load_parquet_into_pg.py \
             --input-dir stage \
-            --tables statcast statsapi_playlog roster lineup
+            --tables statcast statsapi_playlog roster lineup umpires weather fatigue_metrics
+          
+          echo "✅ Data loading complete!"
 
 

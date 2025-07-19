@@ -390,10 +390,6 @@ def fetch_fatigue_metrics_for_date(date_str: str, out_dir: Path):
                 if not team_id:
                     continue
                 
-                # Get recent team schedule for travel fatigue
-                team_schedule = calculator.get_recent_team_schedule(team_id, date_str)
-                travel_metrics = calculator.calculate_team_travel_fatigue(team_schedule, date_str)
-                
                 # Get roster for the date to calculate individual player metrics
                 try:
                     roster_data = statsapi.get("team_roster", {"teamId": team_id, "rosterType": "active"})
@@ -407,8 +403,11 @@ def fetch_fatigue_metrics_for_date(date_str: str, out_dir: Path):
                         if not player_id:
                             continue
                         
+                        # FIX: Better position code handling
+                        position_code = position.get("code", "") if isinstance(position, dict) else ""
+                        position_name = position.get("name", "") if isinstance(position, dict) else ""
+                        
                         # Calculate position-specific metrics using recent data
-                        position_code = position.get("code", "")
                         if position_code == "1":  # Pitcher
                             player_fatigue = calculator.calculate_pitcher_fatigue_from_data(
                                 player_id, date_str, recent_data
@@ -426,7 +425,7 @@ def fetch_fatigue_metrics_for_date(date_str: str, out_dir: Path):
                             "team_type": team_type,
                             "player_id": player_id,
                             "position_code": position_code,
-                            "position_name": position.get("name", ""),
+                            "position_name": position_name,  # FIX: Use the cleaned position_name
                             "player_name": person.get("fullName", ""),
                             
                             # Team travel metrics
@@ -441,6 +440,7 @@ def fetch_fatigue_metrics_for_date(date_str: str, out_dir: Path):
                 except Exception as e:
                     print(f"⚠️ Error processing roster for team {team_id}: {e}")
                     continue
+
         
         if not fatigue_records:
             print(f"✅ No fatigue metrics calculated for {date_str}")

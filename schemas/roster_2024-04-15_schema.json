@@ -1,0 +1,37 @@
+{
+  "date": "2024-04-15",
+  "data_type": "roster",
+  "column_count": 14,
+  "columns": [
+    "game_date",
+    "jerseynumber",
+    "parentteamid",
+    "person_fullname",
+    "person_id",
+    "person_link",
+    "position_abbreviation",
+    "position_code",
+    "position_name",
+    "position_type",
+    "side",
+    "status_code",
+    "status_description",
+    "team_id"
+  ],
+  "dtypes": {
+    "game_date": "object",
+    "team_id": "int64",
+    "side": "object",
+    "person_id": "int64",
+    "person_fullname": "object",
+    "person_link": "object",
+    "jerseynumber": "object",
+    "position_code": "object",
+    "position_name": "object",
+    "position_type": "object",
+    "position_abbreviation": "object",
+    "status_code": "object",
+    "status_description": "object",
+    "parentteamid": "int64"
+  }
+}

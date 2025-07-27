@@ -28,56 +28,37 @@ from tqdm import tqdm
 
 # FIXED IMPORTS - Try to import our custom modules with proper error handling
 try:
-    from py.weather_integration import fetch_weather_for_date
+    from .weather_integration import fetch_weather_for_date
     WEATHER_AVAILABLE = True
     print("✅ Weather integration loaded")
-except ImportError:
-    try:
-        # Alternative import path
-        import sys
-        sys.path.append(str(Path(__file__).parent.parent))
-        from py.weather_integration import fetch_weather_for_date
-        WEATHER_AVAILABLE = True
-        print("✅ Weather integration loaded (via sys.path)")
-    except ImportError:
-        print("⚠️ Weather integration not available - continuing without weather data")
-        WEATHER_AVAILABLE = False
-        def fetch_weather_for_date(*args, **kwargs):
-            pass
+except ImportError as e:
+    print(f"⚠️ Weather integration not available: {e}")
+    WEATHER_AVAILABLE = False
+    def fetch_weather_for_date(*args, **kwargs):
+        print("Weather integration not available - skipping weather data")
+        pass
 
 try:
-    from py.fatigue_metrics import fetch_fatigue_metrics_for_date
+    from .fatigue_metrics import fetch_fatigue_metrics_for_date
     FATIGUE_AVAILABLE = True
     print("✅ Fatigue metrics loaded")
-except ImportError:
-    try:
-        import sys
-        sys.path.append(str(Path(__file__).parent.parent))
-        from py.fatigue_metrics import fetch_fatigue_metrics_for_date
-        FATIGUE_AVAILABLE = True
-        print("✅ Fatigue metrics loaded (via sys.path)")
-    except ImportError:
-        print("⚠️ Fatigue metrics not available - continuing without fatigue data")
-        FATIGUE_AVAILABLE = False
-        def fetch_fatigue_metrics_for_date(*args, **kwargs):
-            pass
+except ImportError as e:
+    print(f"⚠️ Fatigue metrics not available: {e}")
+    FATIGUE_AVAILABLE = False
+    def fetch_fatigue_metrics_for_date(*args, **kwargs):
+        print("Fatigue metrics not available - skipping fatigue data")
+        pass
 
 try:
-    from py.umpire_integration import fetch_umpire_assignments_for_date
+    from .umpire_integration import fetch_umpire_assignments_for_date
     UMPIRE_AVAILABLE = True
     print("✅ Umpire integration loaded")
-except ImportError:
-    try:
-        import sys
-        sys.path.append(str(Path(__file__).parent.parent))
-        from py.umpire_integration import fetch_umpire_assignments_for_date
-        UMPIRE_AVAILABLE = True
-        print("✅ Umpire integration loaded (via sys.path)")
-    except ImportError:
-        print("⚠️ Umpire integration not available - continuing without umpire data")
-        UMPIRE_AVAILABLE = False
-        def fetch_umpire_assignments_for_date(*args, **kwargs):
-            pass
+except ImportError as e:
+    print(f"⚠️ Umpire integration not available: {e}")
+    UMPIRE_AVAILABLE = False
+    def fetch_umpire_assignments_for_date(*args, **kwargs):
+        print("Umpire integration not available - skipping umpire data")
+        pass
 
 # Simple rate limiter class
 class RateLimiter:

@@ -1,0 +1,8 @@
+pandas>=2.0.0
+numpy>=1.25.0
+psycopg2-binary>=2.9.0
+pybaseball>=2.2.1
+MLB-StatsAPI>=1.9.0
+requests>=2.31.0
+tqdm>=4.65.0
+pyarrow>=12.0.0

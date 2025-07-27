@@ -15,15 +15,47 @@ from typing import Dict, List
 
 # Import all your existing and new modules
 try:
-    from daily_betting_analysis import get_complete_betting_analysis
-    from batter_pitcher_matchups import get_todays_matchup_edges, update_all_matchups
-    from pitch_tunneling_analysis import get_todays_tunneling_edges, update_pitcher_tunneling_data
-    from enhanced_betting_integration import EnhancedBettingAnalyzer, print_enhanced_betting_report
-    from backfill_matchup_tunneling import update_matchup_and_tunneling_data
-except ImportError as e:
-    print(f"❌ Import error: {e}")
-    print("Make sure all the new module files are in your py/ directory")
-    sys.exit(1)
+    from .daily_betting_analysis import get_complete_betting_analysis
+except ImportError:
+    print("⚠️ daily_betting_analysis not available")
+    def get_complete_betting_analysis(*args, **kwargs):
+        return {"error": "Module not available"}
+
+try:
+    from .batter_pitcher_matchups import get_todays_matchup_edges, update_all_matchups
+except ImportError:
+    print("⚠️ batter_pitcher_matchups not available")
+    def get_todays_matchup_edges(*args, **kwargs):
+        return [{"error": "Module not available"}]
+    def update_all_matchups(*args, **kwargs):
+        print("⚠️ update_all_matchups not available")
+
+try:
+    from .pitch_tunneling_analysis import get_todays_tunneling_edges, update_pitcher_tunneling_data
+except ImportError:
+    print("⚠️ pitch_tunneling_analysis not available")
+    def get_todays_tunneling_edges(*args, **kwargs):
+        return [{"error": "Module not available"}]
+    def update_pitcher_tunneling_data(*args, **kwargs):
+        print("⚠️ update_pitcher_tunneling_data not available")
+
+try:
+    from .enhanced_betting_integration import EnhancedBettingAnalyzer, print_enhanced_betting_report
+except ImportError:
+    print("⚠️ enhanced_betting_integration not available")
+    class EnhancedBettingAnalyzer:
+        def __init__(self, conn): pass
+        def get_complete_enhanced_analysis(self, *args, **kwargs):
+            return {"error": "Module not available"}
+    def print_enhanced_betting_report(*args, **kwargs):
+        print("⚠️ print_enhanced_betting_report not available")
+
+try:
+    from .backfill_matchup_tunneling import update_matchup_and_tunneling_data
+except ImportError:
+    print("⚠️ backfill_matchup_tunneling not available")
+    def update_matchup_and_tunneling_data(*args, **kwargs):
+        print("⚠️ update_matchup_and_tunneling_data not available")
 
 class MasterDailyAnalyzer:
     """Master daily analysis combining all betting insights"""

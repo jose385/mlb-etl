@@ -9,9 +9,30 @@ from datetime import datetime
 from typing import Dict, List, Optional
 
 # Import existing modules
-from daily_betting_analysis import get_complete_betting_analysis
-from batter_pitcher_matchups import BatterPitcherMatchupAnalyzer, get_todays_matchup_edges
-from pitch_tunneling_analysis import PitchTunnelingAnalyzer, get_todays_tunneling_edges
+try:
+    from .daily_betting_analysis import get_complete_betting_analysis
+except ImportError:
+    print("⚠️ daily_betting_analysis not available")
+    def get_complete_betting_analysis(*args, **kwargs):
+        return {"error": "Module not available"}
+
+try:
+    from .batter_pitcher_matchups import BatterPitcherMatchupAnalyzer, get_todays_matchup_edges
+except ImportError:
+    print("⚠️ batter_pitcher_matchups not available")
+    class BatterPitcherMatchupAnalyzer:
+        def __init__(self, conn): pass
+    def get_todays_matchup_edges(*args, **kwargs):
+        return [{"error": "Module not available"}]
+
+try:
+    from .pitch_tunneling_analysis import PitchTunnelingAnalyzer, get_todays_tunneling_edges
+except ImportError:
+    print("⚠️ pitch_tunneling_analysis not available")
+    class PitchTunnelingAnalyzer:
+        def __init__(self, conn): pass
+    def get_todays_tunneling_edges(*args, **kwargs):
+        return [{"error": "Module not available"}]
 
 class EnhancedBettingAnalyzer:
     """Master analyzer combining all betting insights"""

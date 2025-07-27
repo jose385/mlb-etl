@@ -1,0 +1,3 @@
+[console_scripts]
+mlb-backfill = py.backfill:main
+mlb-daily-analysis = py.master_daily_analysis:main

@@ -1,72 +1,239 @@
 """
-Configuration management for MLB ETL pipeline
+Centralized configuration management for MLB ETL pipeline
+Handles all environment variables with validation and defaults
 """
 import os
-from typing import Optional
+import sys
+from typing import Optional, Dict, List
+from pathlib import Path
+
+class ConfigError(Exception):
+    """Custom exception for configuration errors"""
+    pass
 
 class Config:
-    """Centralized configuration management"""
-    
-    # Database
-    PG_DSN: str = os.getenv("PG_DSN", "")
-    
-    # API Keys
-    OPENWEATHER_API_KEY: str = os.getenv("OPENWEATHER_API_KEY", "")
-    
-    # Directories
-    OUTPUT_DIR: str = os.getenv("OUTPUT_DIR", "stage")
-    MIGRATIONS_DIR: str = "migrations"
-    
-    # Rate Limiting
-    MLB_API_DELAY: float = 0.1  # seconds between API calls
-    WEATHER_API_DELAY: float = 0.2
-    
-    # Data Quality
-    MIN_GAMES_FOR_ANALYSIS: int = 10
-    MIN_SAMPLE_SIZE_UMPIRE: int = 20
-    
-    # Betting Thresholds
-    STRONG_EDGE_THRESHOLD: float = 0.15
-    MODERATE_EDGE_THRESHOLD: float = 0.08
-    
-    @classmethod
-    def validate(cls) -> list[str]:
-        """Validate configuration and return list of issues"""
-        issues = []
-        
-        if not cls.PG_DSN:
-            issues.append("PG_DSN environment variable not set")
-        
-        if not cls.OPENWEATHER_API_KEY:
-            issues.append("OPENWEATHER_API_KEY not set (weather analysis will be limited)")
-            
-        return issues
-
-# ==============================================================================
-# FILE: py/rate_limiter.py (Add this for API rate limiting)
-# ==============================================================================
-#!/usr/bin/env python3
-"""
-Rate limiter for API calls
-"""
-import time
-from typing import Dict
-from datetime import datetime, timedelta
-
-class RateLimiter:
-    """Simple rate limiter for API calls"""
+    """Centralized configuration management with validation"""
     
     def __init__(self):
-        self.last_calls: Dict[str, datetime] = {}
+        self._validated = False
+        self._load_config()
+    
+    def _load_config(self):
+        """Load and set all configuration values"""
         
-    def wait_if_needed(self, api_name: str, min_delay: float = 0.1):
-        """Wait if needed to respect rate limits"""
-        now = datetime.now()
+        # Database Configuration (REQUIRED)
+        self.PG_DSN = os.getenv("PG_DSN", "")
         
-        if api_name in self.last_calls:
-            time_since_last = (now - self.last_calls[api_name]).total_seconds()
-            if time_since_last < min_delay:
-                sleep_time = min_delay - time_since_last
-                time.sleep(sleep_time)
+        # API Keys (CONDITIONAL)
+        self.OPENWEATHER_API_KEY = os.getenv("OPENWEATHER_API_KEY", "")
+        self.MLB_API_KEY = os.getenv("MLB_API_KEY", "")  # Future use
         
-        self.last_calls[api_name] = datetime.now()
+        # Directory Paths
+        self.OUTPUT_DIR = os.getenv("OUTPUT_DIR", "stage")
+        self.MIGRATIONS_DIR = os.getenv("MIGRATIONS_DIR", "migrations")
+        self.LOG_DIR = os.getenv("LOG_DIR", "logs")
+        
+        # Rate Limiting Settings
+        self.MLB_API_DELAY = float(os.getenv("MLB_API_DELAY", "0.1"))
+        self.WEATHER_API_DELAY = float(os.getenv("WEATHER_API_DELAY", "0.2"))
+        
+        # Data Quality Thresholds
+        self.MIN_GAMES_FOR_ANALYSIS = int(os.getenv("MIN_GAMES_FOR_ANALYSIS", "10"))
+        self.MIN_SAMPLE_SIZE_UMPIRE = int(os.getenv("MIN_SAMPLE_SIZE_UMPIRE", "20"))
+        
+        # Betting Configuration
+        self.STRONG_EDGE_THRESHOLD = float(os.getenv("STRONG_EDGE_THRESHOLD", "0.15"))
+        self.MODERATE_EDGE_THRESHOLD = float(os.getenv("MODERATE_EDGE_THRESHOLD", "0.08"))
+        
+        # Feature Flags
+        self.ENABLE_WEATHER = self._str_to_bool(os.getenv("ENABLE_WEATHER", "true"))
+        self.ENABLE_UMPIRE_ANALYSIS = self._str_to_bool(os.getenv("ENABLE_UMPIRE_ANALYSIS", "true"))
+        self.ENABLE_FATIGUE_METRICS = self._str_to_bool(os.getenv("ENABLE_FATIGUE_METRICS", "true"))
+        
+        # Debug/Development
+        self.DEBUG = self._str_to_bool(os.getenv("DEBUG", "false"))
+        self.VERBOSE = self._str_to_bool(os.getenv("VERBOSE", "false"))
+        self.DRY_RUN = self._str_to_bool(os.getenv("DRY_RUN", "false"))
+    
+    def _str_to_bool(self, value: str) -> bool:
+        """Convert string environment variable to boolean"""
+        return value.lower() in ('true', '1', 'yes', 'on', 'enabled')
+    
+    def validate(self, require_weather: bool = False, 
+                 require_database: bool = True) -> List[str]:
+        """
+        Validate configuration and return list of issues
+        
+        Args:
+            require_weather: Whether weather API key is required
+            require_database: Whether database connection is required
+        """
+        issues = []
+        
+        # Database validation
+        if require_database and not self.PG_DSN:
+            issues.append("PG_DSN environment variable is required but not set")
+        
+        if self.PG_DSN and not self._validate_pg_dsn():
+            issues.append("PG_DSN format appears invalid (should be postgresql://user:pass@host:port/db)")
+        
+        # Weather API validation
+        if require_weather and not self.OPENWEATHER_API_KEY:
+            issues.append("OPENWEATHER_API_KEY is required for weather analysis but not set")
+        
+        if self.ENABLE_WEATHER and not self.OPENWEATHER_API_KEY:
+            issues.append("Weather is enabled but OPENWEATHER_API_KEY is not set")
+        
+        # Directory validation
+        directories_to_check = [
+            (self.OUTPUT_DIR, "OUTPUT_DIR"),
+            (self.MIGRATIONS_DIR, "MIGRATIONS_DIR"),
+        ]
+        
+        for dir_path, var_name in directories_to_check:
+            if not Path(dir_path).exists():
+                issues.append(f"{var_name} directory '{dir_path}' does not exist")
+        
+        # Numeric validation
+        if self.MLB_API_DELAY < 0:
+            issues.append("MLB_API_DELAY must be non-negative")
+        
+        if self.WEATHER_API_DELAY < 0:
+            issues.append("WEATHER_API_DELAY must be non-negative")
+        
+        # Log validation results
+        if issues:
+            if self.DEBUG:
+                print(f"🔍 Configuration validation found {len(issues)} issues")
+        else:
+            if self.VERBOSE:
+                print("✅ Configuration validation passed")
+        
+        self._validated = True
+        return issues
+    
+    def _validate_pg_dsn(self) -> bool:
+        """Validate PostgreSQL DSN format"""
+        if not self.PG_DSN:
+            return False
+        
+        # Basic format check
+        if not self.PG_DSN.startswith(('postgresql://', 'postgres://')):
+            return False
+        
+        # Check for required components
+        required_parts = ['@', '/', ':']
+        return all(part in self.PG_DSN for part in required_parts)
+    
+    def test_database_connection(self) -> tuple[bool, str]:
+        """Test database connection without importing psycopg2 in config"""
+        if not self.PG_DSN:
+            return False, "PG_DSN not set"
+        
+        try:
+            import psycopg2
+            conn = psycopg2.connect(self.PG_DSN)
+            conn.close()
+            return True, "Connection successful"
+        except ImportError:
+            return False, "psycopg2 not installed"
+        except Exception as e:
+            return False, f"Connection failed: {e}"
+    
+    def test_weather_api(self) -> tuple[bool, str]:
+        """Test weather API key"""
+        if not self.OPENWEATHER_API_KEY:
+            return False, "OPENWEATHER_API_KEY not set"
+        
+        try:
+            import requests
+            
+            # Test with a simple API call
+            url = "http://api.openweathermap.org/data/2.5/weather"
+            params = {
+                'q': 'New York',
+                'appid': self.OPENWEATHER_API_KEY,
+                'units': 'imperial'
+            }
+            
+            response = requests.get(url, params=params, timeout=10)
+            
+            if response.status_code == 200:
+                return True, "Weather API key valid"
+            elif response.status_code == 401:
+                return False, "Weather API key invalid or expired"
+            else:
+                return False, f"Weather API returned status {response.status_code}"
+                
+        except ImportError:
+            return False, "requests library not installed"
+        except Exception as e:
+            return False, f"Weather API test failed: {e}"
+    
+    def get_summary(self) -> Dict:
+        """Get configuration summary for debugging"""
+        return {
+            "database_configured": bool(self.PG_DSN),
+            "weather_configured": bool(self.OPENWEATHER_API_KEY),
+            "weather_enabled": self.ENABLE_WEATHER,
+            "output_dir": self.OUTPUT_DIR,
+            "debug_mode": self.DEBUG,
+            "validated": self._validated,
+        }
+    
+    def print_status(self):
+        """Print configuration status"""
+        print("⚙️ Configuration Status:")
+        print(f"   Database: {'✅' if self.PG_DSN else '❌'} {'(set)' if self.PG_DSN else '(missing)'}")
+        print(f"   Weather API: {'✅' if self.OPENWEATHER_API_KEY else '❌'} {'(set)' if self.OPENWEATHER_API_KEY else '(missing)'}")
+        print(f"   Output Directory: {'✅' if Path(self.OUTPUT_DIR).exists() else '❌'} {self.OUTPUT_DIR}")
+        print(f"   Debug Mode: {'🐛' if self.DEBUG else '📊'} {'ON' if self.DEBUG else 'OFF'}")
+
+# Global configuration instance
+config = Config()
+
+def require_config(require_weather: bool = False, require_database: bool = True) -> Config:
+    """
+    Validate and return configuration, exiting on errors
+    
+    Args:
+        require_weather: Whether to require weather API
+        require_database: Whether to require database connection
+    
+    Returns:
+        Validated Config instance
+    
+    Raises:
+        SystemExit: If validation fails
+    """
+    issues = config.validate(require_weather=require_weather, 
+                           require_database=require_database)
+    
+    if issues:
+        print("❌ Configuration validation failed:")
+        for issue in issues:
+            print(f"   • {issue}")
+        
+        print("\n🔧 To fix these issues:")
+        if any("PG_DSN" in issue for issue in issues):
+            print("   1. Set database connection:")
+            print("      export PG_DSN='postgresql://user:password@localhost:5432/mlb_db'")
+        
+        if any("OPENWEATHER_API_KEY" in issue for issue in issues):
+            print("   2. Set weather API key:")
+            print("      export OPENWEATHER_API_KEY='your_openweather_api_key'")
+            print("      Get free key at: https://openweathermap.org/api")
+        
+        if any("directory" in issue.lower() for issue in issues):
+            print("   3. Create missing directories:")
+            print(f"      mkdir -p {config.OUTPUT_DIR} {config.MIGRATIONS_DIR}")
+        
+        print("\n   4. See .env.example for all available settings")
+        
+        sys.exit(1)
+    
+    return config
+
+def get_config() -> Config:
+    """Get configuration instance without validation"""
+    return config

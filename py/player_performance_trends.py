@@ -9,6 +9,13 @@ import numpy as np
 from datetime import datetime, timedelta
 import psycopg2
 from typing import Dict, List, Optional
+try:
+    from py.imports import setup_imports
+    setup_imports()
+except ImportError:
+    pass
+
+from py.config import require_config, get_config
 
 def calculate_batter_hot_cold_streaks(conn, player_id: int, lookback_days: int = 30) -> Dict:
     """Analyze batter's recent performance trends"""
@@ -282,7 +289,8 @@ def get_todays_player_trends(conn, game_date: str = None) -> List[Dict]:
 def main():
     """Test player trends analysis"""
     
-    dsn = os.getenv("PG_DSN")
+    config = require_config(require_database=True)
+    dsn = config.PG_DSN
     if not dsn:
         print("❌ PG_DSN environment variable must be set")
         return

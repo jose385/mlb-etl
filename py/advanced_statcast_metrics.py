@@ -9,9 +9,16 @@ import numpy as np
 from datetime import datetime, timedelta
 import psycopg2
 from typing import Dict, List, Optional, Tuple
+
 import warnings
 warnings.filterwarnings('ignore')
+try:
+    from py.imports import setup_imports
+    setup_imports()
+except ImportError:
+    pass
 
+from py.config import require_config, get_config
 class AdvancedStatcastAnalyzer:
     """Calculate advanced Statcast metrics beyond basic stats"""
     
@@ -454,7 +461,8 @@ def main():
     """Test advanced Statcast analysis"""
     
     import os
-    dsn = os.getenv("PG_DSN")
+    config = require_config(require_database=True)
+    dsn = config.PG_DSN
     if not dsn:
         print("❌ PG_DSN environment variable must be set")
         return

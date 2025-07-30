@@ -32,7 +32,10 @@ try:
     setup_imports()
 except ImportError:
     pass
+from py.config import require_config
 
+# Get validated configuration
+config = require_config(require_weather=False, require_database=False)
 try:
     from py.weather_integration import fetch_weather_for_date
     WEATHER_AVAILABLE = True
@@ -176,7 +179,7 @@ def fetch_statcast_for_date(date_str: str, out_dir: Path):
     
     try:
         # Rate limiting for Statcast API
-        rate_limiter.wait_if_needed("statcast", 1.0)
+        rate_limiter.wait_if_needed("statcast", config.MLB_API_DELAY)
         
         # Get ALL available columns from pybaseball
         df = statcast(start_dt=date_str, end_dt=date_str)
@@ -466,7 +469,7 @@ def main():
         compare_schemas()
         return
 
-    out_dir = Path(args.output or os.getenv("OUTPUT_DIR", "stage"))
+    out_dir = Path(args.output or config.OUTPUT_DIR)
     out_dir.mkdir(parents=True, exist_ok=True)
 
     sd = datetime.fromisoformat(args.start)
@@ -518,9 +521,8 @@ def main():
 
                 try:
                     # 1. Fetch weather data first (CONDITIONAL)
-                    weather_api_key = os.getenv("OPENWEATHER_API_KEY")
-                    if WEATHER_AVAILABLE and weather_api_key and should_collect_weather(ds) and "weather" in args.data_types:
-                        fetch_weather_for_date(ds, out_dir, weather_api_key)
+                    if WEATHER_AVAILABLE and config.OPENWEATHER_API_KEY and config.ENABLE_WEATHER and should_collect_weather(ds) and "weather" in args.data_types:
+                        fetch_weather_for_date(ds, out_dir, config.OPENWEATHER_API_KEY)
                     elif WEATHER_AVAILABLE and weather_api_key and "weather" in args.data_types:
                         print(f"⏭️ Skipping weather for {ds} (too old for current weather API)")
                     elif "weather" in args.data_types:

@@ -13,6 +13,8 @@ try:
 except ImportError:
     pass
 
+from py.config import require_config, get_config
+
 try:
     from py.enhanced_umpire_betting import get_todays_umpire_betting_analysis, print_umpire_betting_report
 except ImportError as e:
@@ -249,7 +251,8 @@ def main():
     """Run complete daily betting analysis"""
     
     # Connect to database
-    dsn = os.getenv("PG_DSN")
+    config = require_config(require_database=True)
+    dsn = config.PG_DSN
     if not dsn:
         print("❌ PG_DSN environment variable must be set")
         return

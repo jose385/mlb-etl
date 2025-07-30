@@ -10,7 +10,13 @@ from datetime import datetime, timedelta
 import psycopg2
 from typing import Dict, List, Optional, Tuple
 import json
+try:
+    from py.imports import setup_imports
+    setup_imports()
+except ImportError:
+    pass
 
+from py.config import require_config, get_config
 class TeamAnalytics:
     """Comprehensive team-level analysis for betting"""
     
@@ -678,7 +684,8 @@ def main():
     """Test team analytics"""
     
     import os
-    dsn = os.getenv("PG_DSN")
+    config = require_config(require_database=True)
+    dsn = config.PG_DSN
     if not dsn:
         print("❌ PG_DSN environment variable must be set")
         return

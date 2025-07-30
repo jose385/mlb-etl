@@ -9,6 +9,13 @@ import psycopg2
 from pathlib import Path
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
+try:
+    from py.imports import setup_imports
+    setup_imports()
+except ImportError:
+    pass
+
+from py.config import require_config, get_config
 
 from py.batter_pitcher_matchups import update_all_matchups
 from py.pitch_tunneling_analysis import update_pitcher_tunneling_data
@@ -394,7 +401,8 @@ def main():
     args = parser.parse_args()
     
     # Connect to database
-    dsn = os.getenv("PG_DSN")
+    config = require_config(require_database=True)
+    dsn = config.PG_DSN
     if not dsn:
         print("❌ PG_DSN environment variable must be set")
         return

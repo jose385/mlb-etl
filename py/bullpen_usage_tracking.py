@@ -10,7 +10,13 @@ from datetime import datetime, timedelta
 import psycopg2
 from typing import Dict, List, Optional, Tuple
 import json
+try:
+    from py.imports import setup_imports
+    setup_imports()
+except ImportError:
+    pass
 
+from py.config import require_config, get_config
 def calculate_bullpen_availability(conn, team_id: int, game_date: str, 
                                  lookback_days: int = 7) -> Dict:
     """Calculate bullpen availability and fatigue for a team"""
@@ -429,7 +435,8 @@ def print_bullpen_analysis_report(analysis_results: List[Dict]):
 def main():
     """Test bullpen analysis"""
     
-    dsn = os.getenv("PG_DSN")
+    config = require_config(require_database=True)
+    dsn = config.PG_DSN
     if not dsn:
         print("❌ PG_DSN environment variable must be set")
         return

@@ -16,6 +16,13 @@ from pathlib import Path
 from typing import Dict, Any, Optional
 import statsapi
 from datetime import datetime
+try:
+    from py.imports import setup_imports
+    setup_imports()
+except ImportError:
+    pass
+
+from py.config import require_config, get_config
 
 # Stadium coordinates for weather API calls
 STADIUM_LOCATIONS = {
@@ -286,7 +293,8 @@ if __name__ == "__main__":
     parser.add_argument("--output", default="test_weather", help="Output directory")
     args = parser.parse_args()
     
-    api_key = os.getenv("OPENWEATHER_API_KEY")
+    config = require_config(require_weather=True)
+    api_key = config.OPENWEATHER_API_KEY
     if not api_key:
         print("❌ Set OPENWEATHER_API_KEY environment variable")
         print("   Get a free key at: https://openweathermap.org/api")

@@ -12,6 +12,14 @@ from typing import Dict, List, Optional, Tuple
 from datetime import datetime, timedelta
 import os
 
+try:
+    from py.imports import setup_imports
+    setup_imports()
+except ImportError:
+    pass
+
+from py.config import require_config, get_config
+
 def analyze_umpire_betting_impact(conn, umpire_name: str, lookback_days: int = 365) -> Dict[str, any]:
     """
     Analyze specific umpire's impact on betting outcomes
@@ -245,7 +253,8 @@ def main():
     """Test the enhanced umpire analysis"""
     
     # Connect to database
-    dsn = os.getenv("PG_DSN")
+    config = require_config(require_database=True)
+    dsn = config.PG_DSN
     if not dsn:
         print("❌ PG_DSN environment variable must be set")
         return

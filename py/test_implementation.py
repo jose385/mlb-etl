@@ -11,13 +11,20 @@ import sys
 import psycopg2
 from datetime import datetime, timedelta
 from typing import Dict, List, Tuple
+try:
+    from py.imports import setup_imports
+    setup_imports()
+except ImportError:
+    pass
 
+from py.config import require_config, get_config
 def test_database_tables() -> Tuple[bool, List[str]]:
     """Test that the new database tables exist and have proper structure"""
     
     print("🔍 Testing database tables...")
     
-    dsn = os.getenv("PG_DSN")
+    config = require_config(require_database=True)
+    dsn = config.PG_DSN
     if not dsn:
         return False, ["PG_DSN environment variable not set"]
     
@@ -137,7 +144,8 @@ def test_matchup_analysis() -> Tuple[bool, List[str]]:
     print("⚾ Testing matchup analysis...")
     
     try:
-        dsn = os.getenv("PG_DSN")
+        config = require_config(require_database=True)
+        dsn = config.PG_DSN
         conn = psycopg2.connect(dsn)
         
         from py.batter_pitcher_matchups import BatterPitcherMatchupAnalyzer, get_todays_matchup_edges
@@ -181,7 +189,8 @@ def test_tunneling_analysis() -> Tuple[bool, List[str]]:
     print("🌪️ Testing tunneling analysis...")
     
     try:
-        dsn = os.getenv("PG_DSN")
+        config = require_config(require_database=True)
+        dsn = config.PG_DSN
         conn = psycopg2.connect(dsn)
         
         from py.pitch_tunneling_analysis import PitchTunnelingAnalyzer, get_todays_tunneling_edges
@@ -225,7 +234,8 @@ def test_enhanced_integration() -> Tuple[bool, List[str]]:
     print("💎 Testing enhanced integration...")
     
     try:
-        dsn = os.getenv("PG_DSN")
+        config = require_config(require_database=True)
+        dsn = config.PG_DSN
         conn = psycopg2.connect(dsn)
         
         from py.enhanced_betting_integration import EnhancedBettingAnalyzer
@@ -279,7 +289,8 @@ def test_data_availability() -> Tuple[bool, List[str]]:
     print("📊 Testing data availability...")
     
     try:
-        dsn = os.getenv("PG_DSN")
+        config = require_config(require_database=True)
+        dsn = config.PG_DSN
         conn = psycopg2.connect(dsn)
         cur = conn.cursor()
         

@@ -12,7 +12,13 @@ import psycopg2
 from typing import Dict, List, Optional, Tuple
 from datetime import datetime
 import os
+try:
+    from py.imports import setup_imports
+    setup_imports()
+except ImportError:
+    pass
 
+from py.config import require_config, get_config
 # Comprehensive ballpark factors for all 30 MLB stadiums
 BALLPARK_FACTORS = {
     # High-scoring parks
@@ -443,7 +449,8 @@ def main():
     """Test the weather + park analysis"""
     
     # Connect to database
-    dsn = os.getenv("PG_DSN")
+    config = require_config(require_database=True)
+    dsn = config.PG_DSN
     if not dsn:
         print("❌ PG_DSN environment variable must be set")
         return

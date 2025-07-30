@@ -13,12 +13,13 @@ import argparse
 from datetime import datetime
 from typing import Dict, List
 
-# Import all your existing and new modules
 try:
     from py.imports import setup_imports
     setup_imports()
 except ImportError:
     pass
+
+from py.config import require_config, get_config
 try:
     from py.daily_betting_analysis import get_complete_betting_analysis
 except ImportError:
@@ -327,7 +328,8 @@ def main():
     args = parser.parse_args()
     
     # Connect to database
-    dsn = os.getenv("PG_DSN")
+    config = require_config(require_database=True)
+    dsn = config.PG_DSN
     if not dsn:
         print("❌ PG_DSN environment variable must be set")
         sys.exit(1)

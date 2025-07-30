@@ -15,6 +15,7 @@ import io
 import time
 from pathlib import Path
 from functools import wraps
+from py.config import require_config
 
 import pandas as pd
 import psycopg2
@@ -50,13 +51,19 @@ def retry_database_operation(max_retries=3, delay=1):
 
 @retry_database_operation(max_retries=3, delay=2)
 def connect():
-    """Connect to PostgreSQL with retry logic"""
-    dsn = os.getenv("PG_DSN")
-    if not dsn:
-        raise ValueError("❌ PG_DSN must be set to your PostgreSQL DSN")
+    """Connect to PostgreSQL with configuration validation"""
+    config = require_config(require_database=True)
     
-    print(f"🔄 Connecting to database...")
-    conn = psycopg2.connect(dsn)
+    try:
+        conn = psycopg2.connect(config.PG_DSN)
+        conn.autocommit = True
+        if config.VERBOSE:
+            print(f"✅ Database connection successful")
+        return conn
+    except Exception as e:
+        print(f"❌ Database connection failed: {e}")
+        print(f"   DSN: {config.PG_DSN[:50]}...")
+        raise
     conn.autocommit = True
     print(f"✅ Database connection successful")
     return conn
@@ -64,20 +71,14 @@ def connect():
 
 def test_database_connection():
     """Test database connection before starting main process"""
-    try:
-        conn = connect()
-        cur = conn.cursor()
-        cur.execute("SELECT 1")
-        result = cur.fetchone()
-        if result and result[0] == 1:
-            print("✅ Database connection test successful")
-            conn.close()
-            return True
-        else:
-            print("❌ Database connection test failed - unexpected result")
-            return False
-    except Exception as e:
-        print(f"❌ Database connection test failed: {e}")
+    config = require_config(require_database=True)
+    
+    success, message = config.test_database_connection()
+    if success:
+        print(f"✅ {message}")
+        return True
+    else:
+        print(f"❌ Database connection test failed: {message}")
         return False
 
 

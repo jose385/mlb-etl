@@ -11,6 +11,14 @@ from bullpen_usage_tracking import get_todays_bullpen_analysis
 from advanced_statcast_metrics import AdvancedStatcastAnalyzer
 from team_level_analytics import TeamAnalytics
 
+try:
+    from py.imports import setup_imports
+    setup_imports()
+except ImportError:
+    pass
+
+from py.config import require_config, get_config
+
 def run_complete_enhanced_analysis(conn, game_date=None):
     """Run all analysis modules and combine insights"""
     
@@ -227,7 +235,8 @@ def print_enhanced_analysis_report(analysis):
 if __name__ == "__main__":
     import os
     
-    dsn = os.getenv("PG_DSN")
+    config = require_config(require_database=True)
+    dsn = config.PG_DSN
     if not dsn:
         print("❌ PG_DSN environment variable must be set")
         exit(1)

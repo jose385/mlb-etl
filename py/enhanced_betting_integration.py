@@ -10,14 +10,19 @@ from typing import Dict, List, Optional
 
 # Import existing modules
 try:
-    from .daily_betting_analysis import get_complete_betting_analysis
+    from py.imports import setup_imports
+    setup_imports()
+except ImportError:
+    pass
+try:
+    from py.daily_betting_analysis import get_complete_betting_analysis
 except ImportError:
     print("⚠️ daily_betting_analysis not available")
     def get_complete_betting_analysis(*args, **kwargs):
         return {"error": "Module not available"}
 
 try:
-    from .batter_pitcher_matchups import BatterPitcherMatchupAnalyzer, get_todays_matchup_edges
+    from py.batter_pitcher_matchups import BatterPitcherMatchupAnalyzer, get_todays_matchup_edges
 except ImportError:
     print("⚠️ batter_pitcher_matchups not available")
     class BatterPitcherMatchupAnalyzer:
@@ -26,7 +31,7 @@ except ImportError:
         return [{"error": "Module not available"}]
 
 try:
-    from .pitch_tunneling_analysis import PitchTunnelingAnalyzer, get_todays_tunneling_edges
+    from py.pitch_tunneling_analysis import PitchTunnelingAnalyzer, get_todays_tunneling_edges
 except ImportError:
     print("⚠️ pitch_tunneling_analysis not available")
     class PitchTunnelingAnalyzer:

@@ -7,8 +7,29 @@ Combines umpire and weather+park analysis for complete betting insights
 import os
 import psycopg2
 from datetime import datetime
-from .enhanced_umpire_betting import get_todays_umpire_betting_analysis, print_umpire_betting_report
-from .weather_park_betting import get_todays_weather_park_analysis, print_weather_park_betting_report
+try:
+    from py.imports import setup_imports
+    setup_imports()
+except ImportError:
+    pass
+
+try:
+    from py.enhanced_umpire_betting import get_todays_umpire_betting_analysis, print_umpire_betting_report
+except ImportError as e:
+    print(f"⚠️ Enhanced umpire betting not available: {e}")
+    def get_todays_umpire_betting_analysis(*args, **kwargs):
+        return [{"error": "Module not available"}]
+    def print_umpire_betting_report(*args, **kwargs):
+        print("⚠️ Umpire betting report not available")
+
+try:
+    from py.weather_park_betting import get_todays_weather_park_analysis, print_weather_park_betting_report
+except ImportError as e:
+    print(f"⚠️ Weather park betting not available: {e}")
+    def get_todays_weather_park_analysis(*args, **kwargs):
+        return [{"error": "Module not available"}]
+    def print_weather_park_betting_report(*args, **kwargs):
+        print("⚠️ Weather park betting report not available")
 
 def get_complete_betting_analysis(conn, game_date: str = None) -> dict:
     """Get complete betting analysis combining all factors"""

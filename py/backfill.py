@@ -28,7 +28,13 @@ from tqdm import tqdm
 
 # FIXED IMPORTS - Try to import our custom modules with proper error handling
 try:
-    from .weather_integration import fetch_weather_for_date
+    from py.imports import setup_imports
+    setup_imports()
+except ImportError:
+    pass
+
+try:
+    from py.weather_integration import fetch_weather_for_date
     WEATHER_AVAILABLE = True
     print("✅ Weather integration loaded")
 except ImportError as e:
@@ -39,7 +45,7 @@ except ImportError as e:
         pass
 
 try:
-    from .fatigue_metrics import fetch_fatigue_metrics_for_date
+    from py.fatigue_metrics import fetch_fatigue_metrics_for_date
     FATIGUE_AVAILABLE = True
     print("✅ Fatigue metrics loaded")
 except ImportError as e:
@@ -50,7 +56,7 @@ except ImportError as e:
         pass
 
 try:
-    from .umpire_integration import fetch_umpire_assignments_for_date
+    from py.umpire_integration import fetch_umpire_assignments_for_date
     UMPIRE_AVAILABLE = True
     print("✅ Umpire integration loaded")
 except ImportError as e:

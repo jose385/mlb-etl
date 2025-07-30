@@ -10,8 +10,8 @@ from pathlib import Path
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 
-from batter_pitcher_matchups import update_all_matchups
-from pitch_tunneling_analysis import update_pitcher_tunneling_data
+from py.batter_pitcher_matchups import update_all_matchups
+from py.pitch_tunneling_analysis import update_pitcher_tunneling_data
 
 def update_matchup_and_tunneling_data(conn, game_date: str = None, 
                                      force_update: bool = False):

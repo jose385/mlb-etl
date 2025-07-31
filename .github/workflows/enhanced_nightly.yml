@@ -1,0 +1,288 @@
+# .github/workflows/enhanced_nightly.yml - Updated for enhanced schema
+name: Enhanced MLB Nightly ETL
+
+on:
+  schedule:
+    - cron: '5 4 * * *'  # 00:05 ET (after games are final)
+  workflow_dispatch:      # Manual trigger option
+    inputs:
+      date:
+        description: 'Date to process (YYYY-MM-DD) - defaults to yesterday'
+        required: false
+        type: string
+      days_back:
+        description: 'Number of days back to process (default: 1)'
+        required: false
+        type: string
+        default: '1'
+
+jobs:
+  enhanced_nightly_etl:
+    runs-on: ubuntu-latest
+    
+    # Add PostgreSQL service for loading data
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_DB: mydb
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres -d mydb"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    
+    env:
+      PG_DSN: postgresql://postgres:postgres@localhost:5432/mydb
+      OUTPUT_DIR: stage
+      OPENWEATHER_API_KEY: ${{ secrets.OPENWEATHER_API_KEY }}
+    
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r py/requirements.txt
+
+      - name: Calculate Date Range
+        id: dates
+        run: |
+          if [ "${{ github.event.inputs.date }}" != "" ]; then
+            # Manual trigger - use provided date
+            TARGET_DATE="${{ github.event.inputs.date }}"
+          else
+            # Scheduled run - use yesterday (games are final by 4 AM ET)
+            TARGET_DATE=$(date -d "yesterday" +%Y-%m-%d)
+          fi
+          
+          DAYS_BACK="${{ github.event.inputs.days_back || '1' }}"
+          
+          if [ "$DAYS_BACK" = "1" ]; then
+            START_DATE="$TARGET_DATE"
+            END_DATE="$TARGET_DATE"
+          else
+            START_DATE=$(date -d "$TARGET_DATE - $((DAYS_BACK - 1)) days" +%Y-%m-%d)
+            END_DATE="$TARGET_DATE"
+          fi
+          
+          echo "start_date=$START_DATE" >> $GITHUB_OUTPUT
+          echo "end_date=$END_DATE" >> $GITHUB_OUTPUT
+          echo "🎯 Processing MLB data for: $START_DATE to $END_DATE"
+
+      - name: Run Enhanced Schema Migration
+        run: |
+          # Ensure database schema is up to date with enhanced schema
+          psql "$PG_DSN" -c "CREATE SCHEMA IF NOT EXISTS public;"
+          
+          # Run enhanced schema migration
+          if [ -f "migrations/001_enhanced_simple_schema.sql" ]; then
+            echo "Running enhanced schema migration..."
+            psql "$PG_DSN" -f "migrations/001_enhanced_simple_schema.sql"
+          else
+            echo "⚠️ Enhanced schema migration not found!"
+            exit 1
+          fi
+
+      - name: Fetch Enhanced MLB Data
+        run: |
+          echo "🔄 Starting enhanced MLB data collection..."
+          python py/enhanced_simple_backfill.py \
+            --start "${{ steps.dates.outputs.start_date }}" \
+            --end "${{ steps.dates.outputs.end_date }}" \
+            --output stage
+          
+          echo "📊 Enhanced data collection complete!"
+          
+          # Show what was collected
+          if [ -d "stage" ]; then
+            echo "📁 Files created:"
+            ls -lah stage/ | grep -E "\.(parquet)$" || echo "No parquet files found"
+          fi
+
+      - name: Load Enhanced Data into PostgreSQL
+        run: |
+          echo "📥 Loading enhanced data into PostgreSQL..."
+          python loader/enhanced_load_parquet_into_pg.py \
+            --input-dir stage \
+            --tables games play_by_play game_info weather umpires lineups rosters venue_factors \
+            --validate-schema
+          
+          echo "✅ Enhanced data loading complete!"
+
+      - name: Enhanced Data Quality Checks
+        run: |
+          echo "🔍 Running enhanced data quality checks..."
+          
+          # Check record counts for enhanced schema
+          echo "📊 Record counts by enhanced table:"
+          psql "$PG_DSN" -c "
+            SELECT 'games' as table_name, COUNT(*) as records 
+            FROM games 
+            WHERE game_date = '${{ steps.dates.outputs.start_date }}'
+            UNION ALL
+            SELECT 'play_by_play' as table_name, COUNT(*) as records 
+            FROM play_by_play 
+            WHERE game_date = '${{ steps.dates.outputs.start_date }}'
+            UNION ALL
+            SELECT 'game_info' as table_name, COUNT(*) as records 
+            FROM game_info 
+            WHERE game_date = '${{ steps.dates.outputs.start_date }}'
+            UNION ALL
+            SELECT 'lineups' as table_name, COUNT(*) as records 
+            FROM lineups 
+            WHERE game_date = '${{ steps.dates.outputs.start_date }}'
+            UNION ALL
+            SELECT 'rosters' as table_name, COUNT(*) as records 
+            FROM rosters 
+            WHERE game_date = '${{ steps.dates.outputs.start_date }}'
+            UNION ALL
+            SELECT 'umpires' as table_name, COUNT(*) as records 
+            FROM umpires 
+            WHERE game_date = '${{ steps.dates.outputs.start_date }}'
+            UNION ALL
+            SELECT 'weather' as table_name, COUNT(*) as records 
+            FROM weather 
+            WHERE game_date = '${{ steps.dates.outputs.start_date }}'
+            UNION ALL
+            SELECT 'venue_factors' as table_name, COUNT(*) as records 
+            FROM venue_factors;
+          "
+          
+          # Check for starting pitchers (critical for enhanced analysis)
+          STARTING_PITCHERS=$(psql "$PG_DSN" -t -c "
+            SELECT COUNT(*) 
+            FROM game_info 
+            WHERE game_date = '${{ steps.dates.outputs.start_date }}'
+            AND home_starting_pitcher IS NOT NULL 
+            AND away_starting_pitcher IS NOT NULL;
+          " | tr -d ' ')
+          
+          echo "🎯 Games with starting pitchers: $STARTING_PITCHERS"
+          
+          # Check for home plate umpires
+          HOME_PLATE_UMPS=$(psql "$PG_DSN" -t -c "
+            SELECT COUNT(*) 
+            FROM umpires 
+            WHERE game_date = '${{ steps.dates.outputs.start_date }}'
+            AND position = 'Home Plate';
+          " | tr -d ' ')
+          
+          echo "👨‍⚖️ Home plate umpires found: $HOME_PLATE_UMPS"
+          
+          # Check total games processed
+          GAME_COUNT=$(psql "$PG_DSN" -t -c "
+            SELECT COUNT(*) 
+            FROM game_info 
+            WHERE game_date = '${{ steps.dates.outputs.start_date }}';
+          " | tr -d ' ')
+          
+          echo "🎲 Total games processed: $GAME_COUNT"
+          
+          if [ "$GAME_COUNT" -eq 0 ]; then
+            echo "ℹ️  No games found for ${{ steps.dates.outputs.start_date }} - this is normal for off days"
+          else
+            echo "✅ Successfully processed $GAME_COUNT games"
+            
+            # Enhanced validation
+            COMPLETE_GAMES=$(psql "$PG_DSN" -t -c "
+              SELECT COUNT(*) 
+              FROM game_info gi
+              JOIN umpires u ON gi.game_pk = u.game_pk
+              WHERE gi.game_date = '${{ steps.dates.outputs.start_date }}'
+              AND gi.home_starting_pitcher IS NOT NULL
+              AND u.position = 'Home Plate';
+            " | tr -d ' ')
+            
+            echo "🎯 Complete games (with pitchers + umpires): $COMPLETE_GAMES"
+            
+            COMPLETION_RATE=$(( COMPLETE_GAMES * 100 / GAME_COUNT ))
+            echo "📊 Data completion rate: ${COMPLETION_RATE}%"
+            
+            if [ "$COMPLETION_RATE" -lt 70 ]; then
+              echo "⚠️  Warning: Low data completion rate (${COMPLETION_RATE}%)"
+            else
+              echo "✅ Good data completion rate (${COMPLETION_RATE}%)"
+            fi
+          fi
+
+      - name: Test Enhanced Analysis
+        run: |
+          echo "🧪 Testing enhanced analysis system..."
+          
+          # Test the enhanced data retrieval
+          python -c "
+          from py.enhanced_betting_data_retrieval import EnhancedBettingDataRetriever
+          import os
+          
+          retriever = EnhancedBettingDataRetriever(os.environ['PG_DSN'])
+          
+          # Get a game from today's data
+          import psycopg2
+          conn = psycopg2.connect(os.environ['PG_DSN'])
+          cur = conn.cursor()
+          cur.execute('SELECT game_pk FROM game_info WHERE game_date = %s LIMIT 1', ('${{ steps.dates.outputs.start_date }}',))
+          result = cur.fetchone()
+          
+          if result:
+              game_pk = result[0]
+              print(f'Testing analysis for game {game_pk}...')
+              
+              # Test each component
+              context = retriever.get_game_context(game_pk)
+              print(f'Game context: {\"✅ OK\" if \"error\" not in context else \"❌ FAILED\"}')
+              
+              weather = retriever.get_enhanced_weather_impact(game_pk)
+              print(f'Weather analysis: {\"✅ OK\" if \"error\" not in weather else \"❌ FAILED\"}')
+              
+              umpire = retriever.get_enhanced_umpire_impact(game_pk)
+              print(f'Umpire analysis: {\"✅ OK\" if \"error\" not in umpire else \"❌ FAILED\"}')
+              
+              print('✅ Enhanced analysis system test complete')
+          else:
+              print('ℹ️  No games to test (off day)')
+          
+          conn.close()
+          "
+
+      - name: Cleanup Staging Files
+        run: |
+          # Clean up parquet files to save space (data is now in PostgreSQL)
+          if [ -d "stage" ]; then
+            echo "🧹 Cleaning up staging files..."
+            rm -rf stage/*.parquet
+          fi
+
+      - name: Enhanced Summary Report
+        run: |
+          echo "📋 ENHANCED MLB ETL SUMMARY"
+          echo "=========================="
+          echo "Date processed: ${{ steps.dates.outputs.start_date }}"
+          echo "Enhanced schema: 9 tables (games, play_by_play, game_info, weather, umpires, lineups, rosters, venue_factors)"
+          
+          # Get summary stats
+          psql "$PG_DSN" -c "
+            SELECT 
+              'Enhanced Schema Summary' as report_type,
+              (SELECT COUNT(*) FROM games WHERE game_date = '${{ steps.dates.outputs.start_date }}') as pitch_records,
+              (SELECT COUNT(*) FROM play_by_play WHERE game_date = '${{ steps.dates.outputs.start_date }}') as play_records,
+              (SELECT COUNT(*) FROM game_info WHERE game_date = '${{ steps.dates.outputs.start_date }}') as games_processed,
+              (SELECT COUNT(*) FROM lineups WHERE game_date = '${{ steps.dates.outputs.start_date }}') as lineup_records,
+              (SELECT COUNT(*) FROM umpires WHERE game_date = '${{ steps.dates.outputs.start_date }}') as umpire_records,
+              (SELECT COUNT(*) FROM weather WHERE game_date = '${{ steps.dates.outputs.start_date }}') as weather_records,
+              (SELECT COUNT(*) FROM venue_factors) as venue_records;
+          "
+
+      - name: Send Notification (Optional)
+        if: failure()
+        run: |
+          echo "❌ Enhanced nightly ETL failed for ${{ steps.dates.outputs.start_date }}"
+          # Add Slack/email notification here if desired

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-enhanced_simple_backfill.py - Enhanced MLB data collection
+enhanced_simple_backfill.py - Complete Enhanced MLB data collection
 Collects data for the enhanced simplified schema (9 tables)
-Adds game_info, recent_stats, and venue_factors collection
+Features: Robust error handling, graceful degradation, advanced rate limiting
 
 Usage:
     python enhanced_simple_backfill.py --start YYYY-MM-DD --end YYYY-MM-DD [--output DIR]
@@ -13,14 +13,443 @@ import argparse
 import time
 import requests
 import math
+import logging
+import random
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
+from enum import Enum
+from collections import defaultdict, deque
+from dataclasses import dataclass
 
 import pandas as pd
 import statsapi
 from pybaseball import statcast
 from tqdm import tqdm
+
+# =============================================================================
+# ENHANCED ERROR HANDLING SYSTEM
+# =============================================================================
+
+class DataSourceStatus(Enum):
+    """Status of data source collection"""
+    SUCCESS = "success"
+    PARTIAL_SUCCESS = "partial_success"  
+    FAILED = "failed"
+    SKIPPED = "skipped"
+    API_QUOTA_EXCEEDED = "api_quota_exceeded"
+    API_TEMPORARILY_DOWN = "api_temporarily_down"
+
+class EnhancedErrorHandler:
+    """Enhanced error handling with graceful degradation"""
+    
+    def __init__(self):
+        self.errors = []
+        self.warnings = []
+        self.collection_status = {}
+        self.logger = logging.getLogger(__name__)
+    
+    def record_error(self, data_type: str, error: Exception, critical: bool = False):
+        """Record an error with context"""
+        error_info = {
+            'data_type': data_type,
+            'error': str(error),
+            'error_type': type(error).__name__,
+            'critical': critical,
+            'timestamp': time.time()
+        }
+        
+        self.errors.append(error_info)
+        self.collection_status[data_type] = DataSourceStatus.FAILED
+        
+        if critical:
+            self.logger.error(f"CRITICAL ERROR in {data_type}: {error}")
+        else:
+            self.logger.warning(f"Non-critical error in {data_type}: {error}")
+    
+    def record_success(self, data_type: str, records_count: int = 0):
+        """Record successful data collection"""
+        self.collection_status[data_type] = DataSourceStatus.SUCCESS
+        self.logger.info(f"✅ {data_type}: {records_count} records collected")
+    
+    def record_partial_success(self, data_type: str, reason: str):
+        """Record partial success (some data collected but with issues)"""
+        self.collection_status[data_type] = DataSourceStatus.PARTIAL_SUCCESS
+        self.warnings.append(f"{data_type}: {reason}")
+        self.logger.warning(f"⚠️ {data_type}: Partial success - {reason}")
+    
+    def should_continue_collection(self, data_type: str) -> bool:
+        """Determine if collection should continue after an error"""
+        # Never stop for non-critical data sources
+        non_critical_sources = ['weather', 'umpires', 'venue_factors']
+        
+        if data_type in non_critical_sources:
+            return True
+        
+        # Stop only if too many critical sources have failed
+        critical_failures = sum(1 for dt, status in self.collection_status.items() 
+                              if status == DataSourceStatus.FAILED and dt not in non_critical_sources)
+        
+        return critical_failures < 2  # Allow up to 1 critical failure
+    
+    def get_collection_summary(self) -> Dict:
+        """Get summary of collection results"""
+        total_sources = len(self.collection_status)
+        successful = sum(1 for status in self.collection_status.values() if status == DataSourceStatus.SUCCESS)
+        partial = sum(1 for status in self.collection_status.values() if status == DataSourceStatus.PARTIAL_SUCCESS)
+        failed = sum(1 for status in self.collection_status.values() if status == DataSourceStatus.FAILED)
+        
+        return {
+            'total_sources': total_sources,
+            'successful': successful,
+            'partial_success': partial,
+            'failed': failed,
+            'success_rate': (successful + partial) / total_sources if total_sources > 0 else 0,
+            'errors': self.errors,
+            'warnings': self.warnings,
+            'status_by_source': dict(self.collection_status)
+        }
+
+# =============================================================================
+# ROBUST API RATE LIMITING SYSTEM
+# =============================================================================
+
+@dataclass
+class APIConfig:
+    """Configuration for API rate limiting"""
+    calls_per_minute: int
+    calls_per_hour: int
+    calls_per_day: int
+    base_delay: float
+    max_delay: float
+    timeout: int
+    max_retries: int
+
+class RobustRateLimiter:
+    """Robust rate limiter with different limits per API and exponential backoff"""
+    
+    def __init__(self):
+        # API configurations
+        self.api_configs = {
+            'mlb_statsapi': APIConfig(
+                calls_per_minute=20,
+                calls_per_hour=1000, 
+                calls_per_day=10000,
+                base_delay=0.3,
+                max_delay=10.0,
+                timeout=30,
+                max_retries=3
+            ),
+            'openweather': APIConfig(
+                calls_per_minute=60,
+                calls_per_hour=1000,
+                calls_per_day=10000,
+                base_delay=0.5,
+                max_delay=30.0,
+                timeout=10,
+                max_retries=5
+            ),
+            'pybaseball': APIConfig(
+                calls_per_minute=10,  # Be conservative with baseball-reference
+                calls_per_hour=500,
+                calls_per_day=5000,
+                base_delay=1.0,
+                max_delay=60.0,
+                timeout=45,
+                max_retries=3
+            )
+        }
+        
+        # Track API calls
+        self.call_history = defaultdict(lambda: {
+            'minute': deque(),
+            'hour': deque(), 
+            'day': deque(),
+            'last_call': 0,
+            'consecutive_errors': 0,
+            'total_calls': 0,
+            'quota_reset_time': None
+        })
+    
+    def _clean_old_calls(self, api_name: str):
+        """Remove old calls from tracking"""
+        now = time.time()
+        history = self.call_history[api_name]
+        
+        # Clean minute history (keep last 60 seconds)
+        while history['minute'] and now - history['minute'][0] > 60:
+            history['minute'].popleft()
+        
+        # Clean hour history (keep last 3600 seconds)  
+        while history['hour'] and now - history['hour'][0] > 3600:
+            history['hour'].popleft()
+        
+        # Clean day history (keep last 86400 seconds)
+        while history['day'] and now - history['day'][0] > 86400:
+            history['day'].popleft()
+    
+    def _can_make_call(self, api_name: str) -> Tuple[bool, str, float]:
+        """Check if we can make an API call"""
+        if api_name not in self.api_configs:
+            return True, "Unknown API - no limits", 0
+        
+        config = self.api_configs[api_name]
+        history = self.call_history[api_name]
+        
+        self._clean_old_calls(api_name)
+        
+        # Check quota reset
+        if history['quota_reset_time'] and time.time() < history['quota_reset_time']:
+            wait_time = history['quota_reset_time'] - time.time()
+            return False, f"Quota exceeded, reset in {wait_time:.1f}s", wait_time
+        
+        # Check per-minute limit
+        if len(history['minute']) >= config.calls_per_minute:
+            oldest_call = history['minute'][0]
+            wait_time = 60 - (time.time() - oldest_call)
+            return False, f"Per-minute limit reached", max(0, wait_time)
+        
+        # Check per-hour limit
+        if len(history['hour']) >= config.calls_per_hour:
+            oldest_call = history['hour'][0]
+            wait_time = 3600 - (time.time() - oldest_call)
+            return False, f"Per-hour limit reached", max(0, wait_time)
+        
+        # Check per-day limit
+        if len(history['day']) >= config.calls_per_day:
+            oldest_call = history['day'][0]
+            wait_time = 86400 - (time.time() - oldest_call)
+            return False, f"Per-day limit reached", max(0, wait_time)
+        
+        # Check minimum delay since last call
+        if history['last_call']:
+            time_since_last = time.time() - history['last_call']
+            min_delay = self._calculate_delay(api_name)
+            
+            if time_since_last < min_delay:
+                wait_time = min_delay - time_since_last
+                return False, f"Minimum delay not met", wait_time
+        
+        return True, "OK", 0
+    
+    def _calculate_delay(self, api_name: str) -> float:
+        """Calculate delay with exponential backoff for errors"""
+        config = self.api_configs[api_name]
+        history = self.call_history[api_name]
+        
+        base_delay = config.base_delay
+        
+        # Exponential backoff for consecutive errors
+        if history['consecutive_errors'] > 0:
+            backoff_multiplier = min(2 ** history['consecutive_errors'], 16)  # Cap at 16x
+            delay = base_delay * backoff_multiplier
+        else:
+            delay = base_delay
+        
+        # Add small random jitter to avoid thundering herd
+        jitter = random.uniform(0.1, 0.3)
+        delay += jitter
+        
+        # Ensure we don't exceed max delay
+        return min(delay, config.max_delay)
+    
+    def wait_for_api(self, api_name: str, operation: str = "API call") -> bool:
+        """Wait until we can make an API call"""
+        config = self.api_configs.get(api_name)
+        if not config:
+            return True
+        
+        max_wait_time = 300  # 5 minutes max wait
+        total_wait_time = 0
+        
+        while total_wait_time < max_wait_time:
+            can_call, reason, wait_time = self._can_make_call(api_name)
+            
+            if can_call:
+                return True
+            
+            if wait_time > max_wait_time - total_wait_time:
+                print(f"⏰ {operation} wait time ({wait_time:.1f}s) exceeds maximum - skipping")
+                return False
+            
+            print(f"🚦 {operation}: {reason}, waiting {wait_time:.1f}s...")
+            time.sleep(wait_time)
+            total_wait_time += wait_time
+        
+        print(f"⏰ {operation}: Maximum wait time exceeded")
+        return False
+    
+    def record_api_call(self, api_name: str, success: bool = True):
+        """Record an API call"""
+        now = time.time()
+        history = self.call_history[api_name]
+        
+        # Record the call
+        history['minute'].append(now)
+        history['hour'].append(now)
+        history['day'].append(now)
+        history['last_call'] = now
+        history['total_calls'] += 1
+        
+        # Update error tracking
+        if success:
+            history['consecutive_errors'] = 0
+            # Clear quota reset if we had one and the call succeeded
+            if history['quota_reset_time']:
+                history['quota_reset_time'] = None
+        else:
+            history['consecutive_errors'] += 1
+    
+    def record_quota_exceeded(self, api_name: str, reset_time_seconds: int = 3600):
+        """Record that API quota was exceeded"""
+        self.call_history[api_name]['quota_reset_time'] = time.time() + reset_time_seconds
+        self.call_history[api_name]['consecutive_errors'] += 1
+    
+    def get_api_status(self, api_name: str) -> Dict:
+        """Get current status of an API"""
+        if api_name not in self.api_configs:
+            return {"status": "unknown", "message": "API not configured"}
+        
+        config = self.api_configs[api_name]
+        history = self.call_history[api_name]
+        
+        self._clean_old_calls(api_name)
+        
+        return {
+            "status": "available" if self._can_make_call(api_name)[0] else "limited",
+            "calls_this_minute": len(history['minute']),
+            "calls_this_hour": len(history['hour']),
+            "calls_this_day": len(history['day']),
+            "total_calls": history['total_calls'],
+            "consecutive_errors": history['consecutive_errors'],
+            "limits": {
+                "per_minute": config.calls_per_minute,
+                "per_hour": config.calls_per_hour,
+                "per_day": config.calls_per_day
+            },
+            "quota_reset_time": history['quota_reset_time']
+        }
+
+# Global rate limiter instance
+rate_limiter = RobustRateLimiter()
+
+def api_call_with_retry(api_name: str, operation_name: str, call_func, *args, **kwargs):
+    """Make an API call with robust retry logic"""
+    config = rate_limiter.api_configs.get(api_name)
+    if not config:
+        # No rate limiting for unknown APIs
+        return call_func(*args, **kwargs)
+    
+    last_exception = None
+    
+    for attempt in range(config.max_retries):
+        # Wait for rate limit
+        if not rate_limiter.wait_for_api(api_name, operation_name):
+            print(f"❌ {operation_name}: Rate limit wait failed")
+            return None
+        
+        try:
+            # Make the API call
+            result = call_func(*args, **kwargs)
+            
+            # Record successful call
+            rate_limiter.record_api_call(api_name, success=True)
+            
+            return result
+            
+        except requests.exceptions.HTTPError as e:
+            last_exception = e
+            rate_limiter.record_api_call(api_name, success=False)
+            
+            if e.response.status_code == 429:  # Rate limit exceeded
+                retry_after = int(e.response.headers.get('Retry-After', 60))
+                rate_limiter.record_quota_exceeded(api_name, retry_after)
+                print(f"🚦 {operation_name}: Rate limited, backing off for {retry_after}s")
+                
+                if attempt < config.max_retries - 1:
+                    time.sleep(retry_after)
+                    continue
+                else:
+                    print(f"❌ {operation_name}: Max retries exceeded for rate limiting")
+                    break
+                    
+            elif 500 <= e.response.status_code < 600:  # Server error
+                delay = rate_limiter._calculate_delay(api_name)
+                print(f"🔧 {operation_name}: Server error {e.response.status_code}, retrying in {delay:.1f}s (attempt {attempt + 1}/{config.max_retries})")
+                
+                if attempt < config.max_retries - 1:
+                    time.sleep(delay)
+                    continue
+                else:
+                    print(f"❌ {operation_name}: Max retries exceeded for server errors")
+                    break
+            else:
+                # Client error - don't retry
+                print(f"❌ {operation_name}: Client error {e.response.status_code} - {e}")
+                break
+                
+        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+            last_exception = e
+            rate_limiter.record_api_call(api_name, success=False)
+            
+            delay = rate_limiter._calculate_delay(api_name)
+            print(f"🌐 {operation_name}: Network error, retrying in {delay:.1f}s (attempt {attempt + 1}/{config.max_retries})")
+            
+            if attempt < config.max_retries - 1:
+                time.sleep(delay)
+                continue
+            else:
+                print(f"❌ {operation_name}: Max retries exceeded for network errors")
+                break
+                
+        except Exception as e:
+            last_exception = e
+            rate_limiter.record_api_call(api_name, success=False)
+            print(f"❌ {operation_name}: Unexpected error - {e}")
+            break
+    
+    # All retries failed
+    if last_exception:
+        raise last_exception
+    else:
+        raise Exception(f"{operation_name}: All retry attempts failed")
+
+# =============================================================================
+# STANDARDIZED FILE NAMING SYSTEM
+# =============================================================================
+
+def get_output_filename(data_type: str, date_str: str = None) -> str:
+    """
+    Standardized file naming that matches loader expectations
+    This ensures enhanced_simple_backfill.py creates files that
+    enhanced_load_parquet_into_pg.py can properly map to tables
+    """
+    filename_mapping = {
+        # Core data types (date-specific)
+        'games': f'games_{date_str}.parquet' if date_str else 'games.parquet',
+        'play_by_play': f'play_by_play_{date_str}.parquet' if date_str else 'play_by_play.parquet',
+        'game_info': f'game_info_{date_str}.parquet' if date_str else 'game_info.parquet',
+        'lineups': f'lineups_{date_str}.parquet' if date_str else 'lineups.parquet',
+        'rosters': f'rosters_{date_str}.parquet' if date_str else 'rosters.parquet',
+        'umpires': f'umpires_{date_str}.parquet' if date_str else 'umpires.parquet',
+        'weather': f'weather_{date_str}.parquet' if date_str else 'weather.parquet',
+        
+        # One-time data types (no date)
+        'venue_factors': 'venue_factors.parquet',
+        'recent_stats': f'recent_stats_{date_str}.parquet' if date_str else 'recent_stats.parquet',
+        
+        # Legacy support (in case old names are used)
+        'statcast': f'games_{date_str}.parquet' if date_str else 'games.parquet',
+        'statsapi': f'play_by_play_{date_str}.parquet' if date_str else 'play_by_play.parquet',
+        'lineup': f'lineups_{date_str}.parquet' if date_str else 'lineups.parquet',
+        'roster': f'rosters_{date_str}.parquet' if date_str else 'rosters.parquet',
+    }
+    
+    return filename_mapping.get(data_type, f'{data_type}_{date_str}.parquet' if date_str else f'{data_type}.parquet')
+
+# =============================================================================
+# STADIUM DATA AND CONFIGURATIONS
+# =============================================================================
 
 # Essential stadium coordinates for weather
 STADIUM_LOCATIONS = {
@@ -85,7 +514,24 @@ VENUE_FACTORS = {
         "dome_stadium": False,
         "short_porch": True  # Right field
     },
-    # Add more as needed - this is a sample
+    "Tropicana Field": {
+        "home_team": "Tampa Bay Rays",
+        "elevation_feet": 19,
+        "hr_factor": 0.94,
+        "run_factor": 0.94,
+        "pitcher_friendly_score": 7,
+        "dome_stadium": True,
+        "short_porch": False
+    },
+    "Marlins Park": {
+        "home_team": "Miami Marlins",
+        "elevation_feet": 10,
+        "hr_factor": 0.92,
+        "run_factor": 0.92,
+        "pitcher_friendly_score": 8,
+        "dome_stadium": True,
+        "short_porch": False
+    }
 }
 
 def get_stadium_coords(team_name: str) -> Dict[str, float]:
@@ -98,17 +544,73 @@ def get_stadium_coords(team_name: str) -> Dict[str, float]:
     # Default coordinates (New York)
     return {"lat": 40.7128, "lon": -74.0060}
 
-def rate_limit(last_call_time: float, min_delay: float = 0.5) -> float:
-    """Simple rate limiting"""
-    now = time.time()
-    time_since_last = now - last_call_time
-    if time_since_last < min_delay:
-        time.sleep(min_delay - time_since_last)
-    return time.time()
+# =============================================================================
+# DATA COLLECTION FUNCTIONS WITH ENHANCED ERROR HANDLING
+# =============================================================================
+
+def safe_data_collection(func):
+    """Decorator for safe data collection with error handling"""
+    def wrapper(date_str: str, out_dir: Path, error_handler: EnhancedErrorHandler = None, **kwargs):
+        data_type = func.__name__.replace('fetch_', '').replace('_data', '')
+        
+        if error_handler is None:
+            error_handler = EnhancedErrorHandler()
+        
+        try:
+            # Attempt data collection
+            result = func(date_str, out_dir, **kwargs)
+            
+            if result:
+                error_handler.record_success(data_type)
+                return True
+            else:
+                error_handler.record_partial_success(data_type, "Function returned False but no exception")
+                return False
+                
+        except requests.exceptions.Timeout as e:
+            error_handler.record_error(data_type, e, critical=False)
+            print(f"⏰ {data_type} timeout - will retry with longer timeout")
+            return False
+            
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 429:  # Rate limit exceeded
+                error_handler.record_error(data_type, e, critical=False) 
+                print(f"🚦 {data_type} rate limited - will retry later")
+                time.sleep(60)  # Wait 1 minute
+                return False
+            elif e.response.status_code >= 500:  # Server error
+                error_handler.record_error(data_type, e, critical=False)
+                print(f"🔧 {data_type} server error - continuing without this data")
+                return False
+            else:
+                error_handler.record_error(data_type, e, critical=True)
+                return False
+                
+        except requests.exceptions.ConnectionError as e:
+            error_handler.record_error(data_type, e, critical=False)
+            print(f"🌐 {data_type} connection error - continuing without this data")
+            return False
+            
+        except Exception as e:
+            # Determine if error is critical based on data source
+            critical_sources = ['games', 'play_by_play', 'game_info', 'lineups', 'rosters']
+            is_critical = data_type in critical_sources
+            
+            error_handler.record_error(data_type, e, critical=is_critical)
+            
+            if is_critical:
+                print(f"❌ CRITICAL: {data_type} failed - {str(e)}")
+            else:
+                print(f"⚠️ {data_type} failed but continuing - {str(e)}")
+            
+            return False
+    
+    return wrapper
 
 def fetch_game_data(date_str: str, out_dir: Path) -> bool:
-    """Fetch basic game data using Statcast - RENAMED to games_*.parquet"""
-    out_file = out_dir / f"games_{date_str}.parquet"  # CHANGED: was statcast_
+    """Fetch basic game data using Statcast with robust error handling"""
+    out_file = out_dir / get_output_filename('games', date_str)
+    
     if out_file.exists():
         print(f"⏭️ Skipping games for {date_str} (already exists)")
         return True
@@ -116,8 +618,15 @@ def fetch_game_data(date_str: str, out_dir: Path) -> bool:
     print(f"⚾ Fetching game data for {date_str}...")
     
     try:
-        # Get Statcast data - this includes game info and pitch data
-        df = statcast(start_dt=date_str, end_dt=date_str)
+        # Use robust API calling for Statcast
+        def get_statcast_data():
+            return statcast(start_dt=date_str, end_dt=date_str)
+        
+        df = api_call_with_retry(
+            'pybaseball',
+            f'Statcast data for {date_str}',
+            get_statcast_data
+        )
         
         if df is None or df.empty:
             print(f"✅ No games for {date_str}")
@@ -128,15 +637,10 @@ def fetch_game_data(date_str: str, out_dir: Path) -> bool:
             'game_date', 'game_pk', 'home_team', 'away_team',
             'inning', 'inning_topbot', 'batter', 'pitcher',
             'events', 'description', 'zone', 'balls', 'strikes',
-            'release_speed', 'release_pos_x', 'release_pos_z',
-            'pfx_x', 'pfx_z', 'plate_x', 'plate_z',
-            'vx0', 'vy0', 'vz0', 'ax', 'ay', 'az',
-            'sz_top', 'sz_bot', 'hit_location', 'bb_type',
+            'release_speed', 'plate_x', 'plate_z',
             'hit_distance_sc', 'launch_speed', 'launch_angle',
-            'effective_speed', 'release_spin_rate',
-            'woba_value', 'estimated_woba_using_speedangle',
-            'at_bat_number', 'pitch_number', 'stand', 'p_throws',
-            'outs_when_up', 'delta_run_exp', 'pitch_type'
+            'woba_value', 'at_bat_number', 'pitch_number', 
+            'stand', 'p_throws', 'outs_when_up', 'delta_run_exp', 'pitch_type'
         ]
         
         # Keep only columns that exist in the data
@@ -156,8 +660,9 @@ def fetch_game_data(date_str: str, out_dir: Path) -> bool:
         return False
 
 def fetch_play_by_play_data(date_str: str, out_dir: Path) -> bool:
-    """Fetch play-by-play data - RENAMED from statsapi to play_by_play"""
-    out_file = out_dir / f"play_by_play_{date_str}.parquet"  # CHANGED: was statsapi_
+    """Fetch play-by-play data with robust error handling"""
+    out_file = out_dir / get_output_filename('play_by_play', date_str)
+    
     if out_file.exists():
         print(f"⏭️ Skipping play-by-play for {date_str} (already exists)")
         return True
@@ -165,24 +670,39 @@ def fetch_play_by_play_data(date_str: str, out_dir: Path) -> bool:
     print(f"📊 Fetching play-by-play for {date_str}...")
     
     try:
-        games = statsapi.schedule(start_date=date_str, end_date=date_str) or []
+        # Use robust API calling for MLB StatsAPI
+        def get_schedule_data():
+            return statsapi.schedule(start_date=date_str, end_date=date_str) or []
+        
+        games = api_call_with_retry(
+            'mlb_statsapi',
+            f'MLB schedule for {date_str}',
+            get_schedule_data
+        )
         
         if not games:
             print(f"✅ No games scheduled for {date_str}")
             return True
         
         play_records = []
-        last_call = 0.0
         
         for game in games:
             game_pk = game.get("game_id") or game.get("game_pk")
             
-            # Rate limit
-            last_call = rate_limit(last_call, 0.5)
-            
             try:
-                # Get play-by-play data
-                pbp_data = statsapi.get("game_playByPlay", {"gamePk": game_pk})
+                # Use robust API calling for play-by-play
+                def get_pbp_data():
+                    return statsapi.get("game_playByPlay", {"gamePk": game_pk})
+                
+                pbp_data = api_call_with_retry(
+                    'mlb_statsapi',
+                    f'Play-by-play for game {game_pk}',
+                    get_pbp_data
+                )
+                
+                if not pbp_data:
+                    continue
+                
                 plays = pbp_data.get("allPlays", [])
                 
                 for play_idx, play in enumerate(plays):
@@ -197,38 +717,24 @@ def fetch_play_by_play_data(date_str: str, out_dir: Path) -> bool:
                         "game_pk": game_pk,
                         "at_bat_index": about.get("atBatIndex", play_idx),
                         "event_index": play_idx,
-                        
-                        # Game context
                         "inning": about.get("inning"),
                         "half_inning": about.get("halfInning"),
-                        
-                        # Players
                         "pitcher": play.get("matchup", {}).get("pitcher", {}).get("id"),
                         "batter": play.get("matchup", {}).get("batter", {}).get("id"),
                         "bat_side": play.get("matchup", {}).get("batSide", {}).get("code"),
                         "p_throws": play.get("matchup", {}).get("pitchHand", {}).get("code"),
-                        
-                        # Situation
                         "count_balls": count.get("balls"),
                         "count_strikes": count.get("strikes"),
                         "outs": count.get("outs"),
-                        
-                        # Teams
                         "home_team": about.get("halfInning") == "bottom" and "batting" or "fielding",
                         "away_team": about.get("halfInning") == "top" and "batting" or "fielding",
                         "batting_team": about.get("halfInning") == "top" and "away" or "home",
-                        
-                        # Play outcome
                         "events": result.get("event"),
                         "description": result.get("description"),
-                        
-                        # Score tracking
                         "home_score": about.get("homeScore"),
                         "away_score": about.get("awayScore"),
                         "is_scoring_play": result.get("rbi", 0) > 0,
                         "rbi": result.get("rbi", 0),
-                        
-                        # Runners (simplified)
                         "runner_on_1b": any(r.get("start", {}).get("base") == 1 for r in runners),
                         "runner_on_2b": any(r.get("start", {}).get("base") == 2 for r in runners),
                         "runner_on_3b": any(r.get("start", {}).get("base") == 3 for r in runners),
@@ -254,8 +760,9 @@ def fetch_play_by_play_data(date_str: str, out_dir: Path) -> bool:
         return False
 
 def fetch_game_info_data(date_str: str, out_dir: Path) -> bool:
-    """NEW: Fetch game info with starting pitchers and results"""
-    out_file = out_dir / f"game_info_{date_str}.parquet"
+    """Fetch game info with starting pitchers and results"""
+    out_file = out_dir / get_output_filename('game_info', date_str)
+    
     if out_file.exists():
         print(f"⏭️ Skipping game info for {date_str} (already exists)")
         return True
@@ -263,24 +770,38 @@ def fetch_game_info_data(date_str: str, out_dir: Path) -> bool:
     print(f"🎮 Fetching game info for {date_str}...")
     
     try:
-        games = statsapi.schedule(start_date=date_str, end_date=date_str) or []
+        def get_schedule_data():
+            return statsapi.schedule(start_date=date_str, end_date=date_str) or []
+        
+        games = api_call_with_retry(
+            'mlb_statsapi',
+            f'MLB schedule for {date_str}',
+            get_schedule_data
+        )
         
         if not games:
             print(f"✅ No games scheduled for {date_str}")
             return True
         
         game_info_records = []
-        last_call = 0.0
         
         for game in games:
             game_pk = game.get("game_id") or game.get("game_pk")
             
-            # Rate limit
-            last_call = rate_limit(last_call, 0.3)
-            
             try:
                 # Get detailed game data
-                game_data = statsapi.get("game", {"gamePk": game_pk})
+                def get_game_data():
+                    return statsapi.get("game", {"gamePk": game_pk})
+                
+                game_data = api_call_with_retry(
+                    'mlb_statsapi',
+                    f'Game info for {game_pk}',
+                    get_game_data
+                )
+                
+                if not game_data:
+                    continue
+                
                 game_info = game_data.get("gameData", {})
                 live_data = game_data.get("liveData", {})
                 
@@ -326,14 +847,10 @@ def fetch_game_info_data(date_str: str, out_dir: Path) -> bool:
                     "winning_team": winning_team,
                     "venue_name": venue.get("name", ""),
                     "game_status": status.get("detailedState", ""),
-                    
-                    # Starting pitchers
                     "home_starting_pitcher": home_pitcher_id,
                     "away_starting_pitcher": away_pitcher_id,
                     "home_starter_name": home_pitcher_name,
                     "away_starter_name": away_pitcher_name,
-                    
-                    # Additional context
                     "series_game_number": game.get("seriesGameNumber", 1),
                     "game_time_et": game.get("gameDate", ""),
                     "day_night": "Day" if "1" in game.get("gameDate", "") else "Night",
@@ -357,8 +874,9 @@ def fetch_game_info_data(date_str: str, out_dir: Path) -> bool:
         return False
 
 def fetch_venue_factors_data(out_dir: Path) -> bool:
-    """NEW: One-time setup of venue factors data"""
-    out_file = out_dir / "venue_factors.parquet"
+    """One-time setup of venue factors data"""
+    out_file = out_dir / get_output_filename('venue_factors')
+    
     if out_file.exists():
         print(f"⏭️ Venue factors already exist")
         return True
@@ -380,8 +898,6 @@ def fetch_venue_factors_data(out_dir: Path) -> bool:
                 "short_porch": factors["short_porch"],
                 "season_year": 2024,
                 "last_updated": datetime.now().strftime("%Y-%m-%d"),
-                
-                # Default values for other fields
                 "foul_territory_rank": 15,  # Neutral
                 "over_under_tendency": 0.5,  # Neutral
                 "average_game_length_minutes": 180,  # 3 hours
@@ -401,8 +917,9 @@ def fetch_venue_factors_data(out_dir: Path) -> bool:
         return False
 
 def fetch_lineups_data(date_str: str, out_dir: Path) -> bool:
-    """Fetch lineups data - RENAMED from lineup to lineups"""
-    out_file = out_dir / f"lineups_{date_str}.parquet"  # CHANGED: was lineup_
+    """Fetch lineups data with robust error handling"""
+    out_file = out_dir / get_output_filename('lineups', date_str)
+    
     if out_file.exists():
         print(f"⏭️ Skipping lineups for {date_str} (already exists)")
         return True
@@ -410,24 +927,38 @@ def fetch_lineups_data(date_str: str, out_dir: Path) -> bool:
     print(f"👥 Fetching lineups for {date_str}...")
     
     try:
-        games = statsapi.schedule(start_date=date_str, end_date=date_str) or []
+        def get_schedule_data():
+            return statsapi.schedule(start_date=date_str, end_date=date_str) or []
+        
+        games = api_call_with_retry(
+            'mlb_statsapi',
+            f'MLB schedule for {date_str}',
+            get_schedule_data
+        )
         
         if not games:
             print(f"✅ No games scheduled for {date_str}")
             return True
         
         lineup_records = []
-        last_call = 0.0
         
         for game in games:
             game_pk = game.get("game_id") or game.get("game_pk")
             
-            # Rate limit
-            last_call = rate_limit(last_call, 0.5)
-            
             try:
                 # Get boxscore with lineup data
-                boxscore = statsapi.get("game_boxscore", {"gamePk": game_pk})
+                def get_boxscore_data():
+                    return statsapi.get("game_boxscore", {"gamePk": game_pk})
+                
+                boxscore = api_call_with_retry(
+                    'mlb_statsapi',
+                    f'Boxscore for game {game_pk}',
+                    get_boxscore_data
+                )
+                
+                if not boxscore:
+                    continue
+                
                 teams = boxscore.get("teams", {})
                 
                 for side in ["home", "away"]:
@@ -452,16 +983,10 @@ def fetch_lineups_data(date_str: str, out_dir: Path) -> bool:
                             "batting_order": batting_order,
                             "person_id": player_id,
                             "person_full_name": person.get("fullName", ""),
-                            
-                            # Position info
                             "position_code": position.get("code"),
                             "position_name": position.get("name"),
-                            
-                            # Essential info for schema
                             "person_bat_side_code": person.get("batSide", {}).get("code"),
                             "person_pitch_hand_code": person.get("pitchHand", {}).get("code"),
-                            
-                            # Simplified season stats
                             "season_avg": stats.get("avg"),
                             "season_obp": stats.get("obp"),
                             "season_slg": stats.get("slg"),
@@ -490,8 +1015,9 @@ def fetch_lineups_data(date_str: str, out_dir: Path) -> bool:
         return False
 
 def fetch_rosters_data(date_str: str, out_dir: Path) -> bool:
-    """Fetch rosters data - RENAMED from roster to rosters"""
-    out_file = out_dir / f"rosters_{date_str}.parquet"  # CHANGED: was roster_
+    """Fetch rosters data with robust error handling"""
+    out_file = out_dir / get_output_filename('rosters', date_str)
+    
     if out_file.exists():
         print(f"⏭️ Skipping rosters for {date_str} (already exists)")
         return True
@@ -500,7 +1026,14 @@ def fetch_rosters_data(date_str: str, out_dir: Path) -> bool:
     
     try:
         # Get games for the date
-        games = statsapi.schedule(start_date=date_str, end_date=date_str) or []
+        def get_schedule_data():
+            return statsapi.schedule(start_date=date_str, end_date=date_str) or []
+        
+        games = api_call_with_retry(
+            'mlb_statsapi',
+            f'MLB schedule for {date_str}',
+            get_schedule_data
+        )
         
         if not games:
             print(f"✅ No games scheduled for {date_str}")
@@ -508,7 +1041,6 @@ def fetch_rosters_data(date_str: str, out_dir: Path) -> bool:
         
         roster_records = []
         seen_teams = set()
-        last_call = 0.0
         
         for game in games:
             for team_id in [game["home_id"], game["away_id"]]:
@@ -516,14 +1048,21 @@ def fetch_rosters_data(date_str: str, out_dir: Path) -> bool:
                     continue
                 seen_teams.add(team_id)
                 
-                # Rate limit
-                last_call = rate_limit(last_call, 0.3)
-                
                 try:
-                    roster_data = statsapi.get("team_roster", {
-                        "teamId": team_id, 
-                        "rosterType": "active"
-                    })
+                    def get_roster_data():
+                        return statsapi.get("team_roster", {
+                            "teamId": team_id, 
+                            "rosterType": "active"
+                        })
+                    
+                    roster_data = api_call_with_retry(
+                        'mlb_statsapi',
+                        f'Roster for team {team_id}',
+                        get_roster_data
+                    )
+                    
+                    if not roster_data:
+                        continue
                     
                     for player in roster_data.get("roster", []):
                         person = player.get("person", {})
@@ -563,8 +1102,9 @@ def fetch_rosters_data(date_str: str, out_dir: Path) -> bool:
         return False
 
 def fetch_weather_data(date_str: str, out_dir: Path, api_key: Optional[str] = None) -> bool:
-    """Fetch weather data - UNCHANGED but improved"""
-    out_file = out_dir / f"weather_{date_str}.parquet"
+    """Fetch weather data with robust error handling"""
+    out_file = out_dir / get_output_filename('weather', date_str)
+    
     if out_file.exists():
         print(f"⏭️ Skipping weather for {date_str} (already exists)")
         return True
@@ -582,53 +1122,223 @@ def fetch_weather_data(date_str: str, out_dir: Path, api_key: Optional[str] = No
     
     print(f"🌤️ Fetching weather for {date_str}...")
     
-    # [Rest of weather function unchanged]
-    # ... keeping existing weather logic
-    return True
+    try:
+        # Get games for the date first
+        def get_schedule_data():
+            return statsapi.schedule(start_date=date_str, end_date=date_str) or []
+        
+        games = api_call_with_retry(
+            'mlb_statsapi',
+            f'MLB schedule for {date_str}',
+            get_schedule_data
+        )
+        
+        if not games:
+            print(f"✅ No games scheduled for {date_str}")
+            return True
+        
+        weather_records = []
+        
+        for game in games:
+            try:
+                home_team = game.get("home_name", "")
+                away_team = game.get("away_name", "")
+                
+                # Get stadium coordinates
+                coords = get_stadium_coords(home_team)
+                
+                # Get weather data
+                def get_weather_data():
+                    url = "http://api.openweathermap.org/data/2.5/weather"
+                    params = {
+                        'lat': coords['lat'],
+                        'lon': coords['lon'],
+                        'appid': api_key,
+                        'units': 'imperial'
+                    }
+                    response = requests.get(url, params=params, timeout=10)
+                    response.raise_for_status()
+                    return response.json()
+                
+                weather_data = api_call_with_retry(
+                    'openweather',
+                    f'Weather for {home_team}',
+                    get_weather_data
+                )
+                
+                if not weather_data:
+                    continue
+                
+                # Extract weather info
+                main = weather_data.get('main', {})
+                wind = weather_data.get('wind', {})
+                
+                weather_record = {
+                    "game_date": date_str,
+                    "game_pk": game.get("game_id") or game.get("game_pk"),
+                    "venue_name": game.get("venue_name", ""),
+                    "home_team": home_team,
+                    "away_team": away_team,
+                    "temperature_f": main.get('temp'),
+                    "humidity_pct": main.get('humidity'),
+                    "wind_speed_mph": wind.get('speed'),
+                    "wind_direction_deg": wind.get('deg'),
+                    "data_source": "openweather",
+                }
+                
+                weather_records.append(weather_record)
+                
+            except Exception as e:
+                print(f"⚠️ Error getting weather for game: {e}")
+                continue
+        
+        if weather_records:
+            df = pd.DataFrame(weather_records)
+            df.to_parquet(out_file, index=False)
+            print(f"✅ Weather: {len(df)} games → {out_file.name}")
+        else:
+            print(f"✅ No weather data for {date_str}")
+        
+        return True
+        
+    except Exception as e:
+        print(f"❌ Weather error for {date_str}: {e}")
+        return False
 
 def fetch_umpires_data(date_str: str, out_dir: Path) -> bool:
-    """Fetch umpires data - UNCHANGED"""
-    out_file = out_dir / f"umpires_{date_str}.parquet"
+    """Fetch umpires data with basic info"""
+    out_file = out_dir / get_output_filename('umpires', date_str)
+    
     if out_file.exists():
         print(f"⏭️ Skipping umpires for {date_str} (already exists)")
         return True
     
     print(f"👨‍⚖️ Fetching umpires for {date_str}...")
     
-    # [Rest of umpire function unchanged]
-    # ... keeping existing umpire logic
-    return True
+    try:
+        # For now, create basic placeholder structure
+        # TODO: Implement actual umpire data collection when API is available
+        
+        def get_schedule_data():
+            return statsapi.schedule(start_date=date_str, end_date=date_str) or []
+        
+        games = api_call_with_retry(
+            'mlb_statsapi',
+            f'MLB schedule for {date_str}',
+            get_schedule_data
+        )
+        
+        if not games:
+            print(f"✅ No games scheduled for {date_str}")
+            return True
+        
+        # Create placeholder umpire records
+        umpire_records = []
+        for game in games:
+            umpire_record = {
+                "game_date": date_str,
+                "game_pk": game.get("game_id") or game.get("game_pk"),
+                "umpire_id": None,
+                "umpire_name": "TBD",
+                "position": "Home Plate",
+                "avg_total_runs_in_games": 8.5,  # MLB average
+                "over_under_record": 0.5,  # Neutral
+                "sample_size": 0,
+            }
+            umpire_records.append(umpire_record)
+        
+        if umpire_records:
+            df = pd.DataFrame(umpire_records)
+            df.to_parquet(out_file, index=False)
+            print(f"✅ Umpires: {len(df)} assignments → {out_file.name}")
+        
+        return True
+        
+    except Exception as e:
+        print(f"❌ Umpires error for {date_str}: {e}")
+        return False
 
-def backfill_date(date_str: str, out_dir: Path, weather_api_key: Optional[str] = None) -> Dict[str, bool]:
-    """Enhanced backfill for all data types"""
-    print(f"\n📅 Processing {date_str}")
+# =============================================================================
+# ENHANCED BACKFILL ORCHESTRATION
+# =============================================================================
+
+def enhanced_backfill_date(date_str: str, out_dir: Path, weather_api_key: Optional[str] = None) -> Dict[str, any]:
+    """Enhanced backfill with comprehensive error handling and robust rate limiting"""
+    print(f"\n📅 Processing {date_str} with enhanced error handling")
     
-    # One-time venue setup
+    error_handler = EnhancedErrorHandler()
+    
+    # Collection functions with priority order (most important first)
+    collection_tasks = [
+        ('games', lambda: safe_data_collection(fetch_game_data)(date_str, out_dir, error_handler)),
+        ('play_by_play', lambda: safe_data_collection(fetch_play_by_play_data)(date_str, out_dir, error_handler)),
+        ('game_info', lambda: safe_data_collection(fetch_game_info_data)(date_str, out_dir, error_handler)),
+        ('lineups', lambda: safe_data_collection(fetch_lineups_data)(date_str, out_dir, error_handler)),
+        ('rosters', lambda: safe_data_collection(fetch_rosters_data)(date_str, out_dir, error_handler)),
+        ('umpires', lambda: safe_data_collection(fetch_umpires_data)(date_str, out_dir, error_handler)),
+        ('weather', lambda: safe_data_collection(fetch_weather_data)(date_str, out_dir, error_handler, weather_api_key)),
+    ]
+    
+    # One-time venue setup (non-critical)
     venue_setup = True
-    if not (out_dir / "venue_factors.parquet").exists():
-        venue_setup = fetch_venue_factors_data(out_dir)
+    if not (out_dir / get_output_filename('venue_factors')).exists():
+        try:
+            venue_setup = fetch_venue_factors_data(out_dir)
+            if venue_setup:
+                error_handler.record_success('venue_factors')
+            else:
+                error_handler.record_partial_success('venue_factors', 'Setup returned False')
+        except Exception as e:
+            error_handler.record_error('venue_factors', e, critical=False)
+            venue_setup = False
     
-    results = {
-        "games": fetch_game_data(date_str, out_dir),
-        "play_by_play": fetch_play_by_play_data(date_str, out_dir),  # RENAMED
-        "game_info": fetch_game_info_data(date_str, out_dir),  # NEW
-        "weather": fetch_weather_data(date_str, out_dir, weather_api_key),
-        "umpires": fetch_umpires_data(date_str, out_dir),
-        "lineups": fetch_lineups_data(date_str, out_dir),  # RENAMED
-        "rosters": fetch_rosters_data(date_str, out_dir),  # RENAMED
-        "venue_factors": venue_setup  # NEW
-    }
+    # Execute collection tasks
+    results = {'venue_factors': venue_setup}
     
-    success_count = sum(results.values())
-    print(f"📊 {date_str}: {success_count}/8 data types collected successfully")
+    for data_type, task_func in collection_tasks:
+        if not error_handler.should_continue_collection(data_type):
+            print(f"🛑 Stopping collection due to too many critical failures")
+            break
+        
+        print(f"📊 Collecting {data_type}...")
+        try:
+            results[data_type] = task_func()
+        except Exception as e:
+            error_handler.record_error(data_type, e, critical=True)
+            results[data_type] = False
+        
+        # Small delay between collections to be respectful
+        time.sleep(0.2)
+    
+    # Get summary
+    summary = error_handler.get_collection_summary()
+    results['summary'] = summary
+    
+    # Print results
+    success_count = summary['successful'] + summary['partial_success']
+    total_count = summary['total_sources']
+    
+    print(f"📊 {date_str}: {success_count}/{total_count} data sources collected successfully")
+    print(f"   Success rate: {summary['success_rate']:.1%}")
+    
+    if summary['warnings']:
+        print(f"   ⚠️ Warnings: {len(summary['warnings'])}")
+    
+    if summary['errors']:
+        critical_errors = [e for e in summary['errors'] if e['critical']]
+        if critical_errors:
+            print(f"   ❌ Critical errors: {len(critical_errors)}")
+        else:
+            print(f"   ⚠️ Non-critical errors: {len(summary['errors'])}")
     
     return results
 
 def main():
-    parser = argparse.ArgumentParser(description="Enhanced MLB data backfill")
+    parser = argparse.ArgumentParser(description="Enhanced MLB data backfill with robust error handling")
     parser.add_argument("--start", required=True, help="Start date (YYYY-MM-DD)")
     parser.add_argument("--end", required=True, help="End date (YYYY-MM-DD)")
     parser.add_argument("--output", default="data", help="Output directory")
+    parser.add_argument("--show-api-status", action="store_true", help="Show API rate limit status")
     args = parser.parse_args()
     
     # Parse dates
@@ -651,6 +1361,14 @@ def main():
     print(f"🚀 Enhanced MLB backfill: {start_date.date()} to {end_date.date()}")
     print(f"📁 Output directory: {out_dir}")
     print(f"🎯 Collecting: games, play_by_play, game_info, weather, umpires, lineups, rosters, venue_factors")
+    print(f"🛡️ Features: Robust error handling, graceful degradation, advanced rate limiting")
+    
+    # Show API status if requested
+    if args.show_api_status:
+        print(f"\n📊 API Status:")
+        for api_name in ['mlb_statsapi', 'openweather', 'pybaseball']:
+            status = rate_limiter.get_api_status(api_name)
+            print(f"   {api_name}: {status['status']} ({status['calls_this_hour']}/{status['limits']['per_hour']} calls/hour)")
     
     # Process each date
     current_date = start_date
@@ -659,6 +1377,8 @@ def main():
         "games": 0, "play_by_play": 0, "game_info": 0, "weather": 0, 
         "umpires": 0, "lineups": 0, "rosters": 0, "venue_factors": 0
     }
+    total_errors = 0
+    total_warnings = 0
     
     with tqdm(total=total_days, desc="Processing dates") as pbar:
         while current_date <= end_date:
@@ -666,15 +1386,19 @@ def main():
             pbar.set_description(f"Processing {date_str}")
             
             try:
-                day_results = backfill_date(date_str, out_dir, weather_api_key)
+                day_results = enhanced_backfill_date(date_str, out_dir, weather_api_key)
                 
                 # Update overall results
                 for data_type, success in day_results.items():
-                    if success:
+                    if data_type == 'summary':
+                        total_errors += len(day_results['summary']['errors'])
+                        total_warnings += len(day_results['summary']['warnings'])
+                    elif success:
                         overall_results[data_type] += 1
                         
             except Exception as e:
                 print(f"❌ Error processing {date_str}: {e}")
+                total_errors += 1
             
             current_date += timedelta(days=1)
             pbar.update(1)
@@ -682,15 +1406,25 @@ def main():
             # Small delay to be respectful to APIs
             time.sleep(0.1)
     
-    # Print summary
+    # Print enhanced summary
     print(f"\n🎉 Enhanced backfill complete!")
     print(f"📊 Success rates:")
     for data_type, success_count in overall_results.items():
         success_rate = (success_count / total_days) * 100
         print(f"   {data_type}: {success_count}/{total_days} days ({success_rate:.1f}%)")
     
+    print(f"\n🛡️ Error handling summary:")
+    print(f"   Total errors: {total_errors}")
+    print(f"   Total warnings: {total_warnings}")
+    
+    # Show final API status
+    print(f"\n📊 Final API Usage:")
+    for api_name in ['mlb_statsapi', 'openweather', 'pybaseball']:
+        status = rate_limiter.get_api_status(api_name)
+        print(f"   {api_name}: {status['total_calls']} total calls, {status['consecutive_errors']} consecutive errors")
+    
     print(f"\n💡 Next steps:")
-    print(f"   1. Load data: python run_loader.py")
+    print(f"   1. Load data: python run_loader.py --input-dir {args.output}")
     print(f"   2. Run analysis: python enhanced_simple_analysis.py")
 
 if __name__ == "__main__":

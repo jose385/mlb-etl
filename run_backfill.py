@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Wrapper script to run backfill with proper environment validation
+Wrapper script to run ENHANCED backfill with proper environment validation
 """
 import sys
 from pathlib import Path
@@ -25,9 +25,9 @@ def main():
         print("\n💡 Tip: Run 'python setup_env.py' to configure your environment")
         sys.exit(1)
     
-    # Now import and run the main function
-    from py.backfill import main as backfill_main
-    backfill_main()
+    # CHANGED: Import and run the ENHANCED backfill instead of old backfill
+    from py.enhanced_simple_backfill import main as enhanced_backfill_main
+    enhanced_backfill_main()
 
 if __name__ == "__main__":
     main()

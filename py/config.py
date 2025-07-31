@@ -1,6 +1,7 @@
 """
 Centralized configuration management for MLB ETL pipeline
 Handles all environment variables with validation and defaults
+Enhanced for 9-table betting analysis system
 """
 import os
 import sys
@@ -33,22 +34,41 @@ class Config:
         self.MIGRATIONS_DIR = os.getenv("MIGRATIONS_DIR", "migrations")
         self.LOG_DIR = os.getenv("LOG_DIR", "logs")
         
-        # Rate Limiting Settings
-        self.MLB_API_DELAY = float(os.getenv("MLB_API_DELAY", "0.1"))
-        self.WEATHER_API_DELAY = float(os.getenv("WEATHER_API_DELAY", "0.2"))
+        # Enhanced Rate Limiting Settings
+        self.MLB_API_DELAY = float(os.getenv("MLB_API_DELAY", "0.2"))
+        self.WEATHER_API_DELAY = float(os.getenv("WEATHER_API_DELAY", "0.5"))
+        self.STATS_API_DELAY = float(os.getenv("STATS_API_DELAY", "0.3"))
         
-        # Data Quality Thresholds
-        self.MIN_GAMES_FOR_ANALYSIS = int(os.getenv("MIN_GAMES_FOR_ANALYSIS", "10"))
-        self.MIN_SAMPLE_SIZE_UMPIRE = int(os.getenv("MIN_SAMPLE_SIZE_UMPIRE", "20"))
+        # Enhanced Data Quality Thresholds
+        self.MIN_GAMES_FOR_ANALYSIS = int(os.getenv("MIN_GAMES_FOR_ANALYSIS", "5"))
+        self.MIN_SAMPLE_SIZE_UMPIRE = int(os.getenv("MIN_SAMPLE_SIZE_UMPIRE", "15"))
+        self.MIN_PITCHER_STARTS = int(os.getenv("MIN_PITCHER_STARTS", "3"))
+        self.MIN_TEAM_GAMES = int(os.getenv("MIN_TEAM_GAMES", "7"))
         
-        # Betting Configuration
-        self.STRONG_EDGE_THRESHOLD = float(os.getenv("STRONG_EDGE_THRESHOLD", "0.15"))
-        self.MODERATE_EDGE_THRESHOLD = float(os.getenv("MODERATE_EDGE_THRESHOLD", "0.08"))
+        # Enhanced Betting Analysis Thresholds
+        self.STRONG_EDGE_THRESHOLD = float(os.getenv("STRONG_EDGE_THRESHOLD", "0.12"))
+        self.MODERATE_EDGE_THRESHOLD = float(os.getenv("MODERATE_EDGE_THRESHOLD", "0.06"))
+        self.WEATHER_IMPACT_THRESHOLD = float(os.getenv("WEATHER_IMPACT_THRESHOLD", "0.08"))
         
-        # Feature Flags
+        # Enhanced Feature Flags (true/false)
         self.ENABLE_WEATHER = self._str_to_bool(os.getenv("ENABLE_WEATHER", "true"))
         self.ENABLE_UMPIRE_ANALYSIS = self._str_to_bool(os.getenv("ENABLE_UMPIRE_ANALYSIS", "true"))
-        self.ENABLE_FATIGUE_METRICS = self._str_to_bool(os.getenv("ENABLE_FATIGUE_METRICS", "true"))
+        self.ENABLE_VENUE_FACTORS = self._str_to_bool(os.getenv("ENABLE_VENUE_FACTORS", "true"))
+        self.ENABLE_RECENT_STATS = self._str_to_bool(os.getenv("ENABLE_RECENT_STATS", "true"))
+        self.ENABLE_GAME_INFO = self._str_to_bool(os.getenv("ENABLE_GAME_INFO", "true"))
+        
+        # New Enhanced Features
+        self.ENABLE_PITCHER_WORKLOAD = self._str_to_bool(os.getenv("ENABLE_PITCHER_WORKLOAD", "true"))
+        self.ENABLE_TEAM_FORM_ANALYSIS = self._str_to_bool(os.getenv("ENABLE_TEAM_FORM_ANALYSIS", "true"))
+        self.ENABLE_BALLPARK_ADJUSTMENTS = self._str_to_bool(os.getenv("ENABLE_BALLPARK_ADJUSTMENTS", "true"))
+        
+        # Legacy Feature Flags (for backward compatibility)
+        self.ENABLE_FATIGUE_METRICS = self._str_to_bool(os.getenv("ENABLE_FATIGUE_METRICS", "false"))
+        
+        # Enhanced Logging
+        self.LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
+        self.LOG_TO_FILE = self._str_to_bool(os.getenv("LOG_TO_FILE", "true"))
+        self.PERFORMANCE_MONITORING = self._str_to_bool(os.getenv("PERFORMANCE_MONITORING", "false"))
         
         # Debug/Development
         self.DEBUG = self._str_to_bool(os.getenv("DEBUG", "false"))
@@ -94,12 +114,27 @@ class Config:
             if not Path(dir_path).exists():
                 issues.append(f"{var_name} directory '{dir_path}' does not exist")
         
-        # Numeric validation
-        if self.MLB_API_DELAY < 0:
-            issues.append("MLB_API_DELAY must be non-negative")
+        # Enhanced numeric validation
+        numeric_validations = [
+            (self.MLB_API_DELAY, "MLB_API_DELAY", 0),
+            (self.WEATHER_API_DELAY, "WEATHER_API_DELAY", 0),
+            (self.STATS_API_DELAY, "STATS_API_DELAY", 0),
+            (self.MIN_GAMES_FOR_ANALYSIS, "MIN_GAMES_FOR_ANALYSIS", 1),
+            (self.MIN_SAMPLE_SIZE_UMPIRE, "MIN_SAMPLE_SIZE_UMPIRE", 1),
+            (self.MIN_PITCHER_STARTS, "MIN_PITCHER_STARTS", 1),
+            (self.MIN_TEAM_GAMES, "MIN_TEAM_GAMES", 1),
+            (self.STRONG_EDGE_THRESHOLD, "STRONG_EDGE_THRESHOLD", 0),
+            (self.MODERATE_EDGE_THRESHOLD, "MODERATE_EDGE_THRESHOLD", 0),
+            (self.WEATHER_IMPACT_THRESHOLD, "WEATHER_IMPACT_THRESHOLD", 0),
+        ]
         
-        if self.WEATHER_API_DELAY < 0:
-            issues.append("WEATHER_API_DELAY must be non-negative")
+        for value, name, min_value in numeric_validations:
+            if value < min_value:
+                issues.append(f"{name} must be >= {min_value}")
+        
+        # Enhanced feature validation
+        if self.ENABLE_VENUE_FACTORS and not self.ENABLE_WEATHER:
+            issues.append("ENABLE_VENUE_FACTORS requires ENABLE_WEATHER to be true")
         
         # Log validation results
         if issues:
@@ -171,23 +206,58 @@ class Config:
             return False, f"Weather API test failed: {e}"
     
     def get_summary(self) -> Dict:
-        """Get configuration summary for debugging"""
+        """Get enhanced configuration summary for debugging"""
         return {
             "database_configured": bool(self.PG_DSN),
             "weather_configured": bool(self.OPENWEATHER_API_KEY),
             "weather_enabled": self.ENABLE_WEATHER,
+            "venue_factors_enabled": self.ENABLE_VENUE_FACTORS,
+            "recent_stats_enabled": self.ENABLE_RECENT_STATS,
+            "game_info_enabled": self.ENABLE_GAME_INFO,
+            "pitcher_workload_enabled": self.ENABLE_PITCHER_WORKLOAD,
             "output_dir": self.OUTPUT_DIR,
             "debug_mode": self.DEBUG,
             "validated": self._validated,
         }
     
     def print_status(self):
-        """Print configuration status"""
-        print("⚙️ Configuration Status:")
+        """Print enhanced configuration status"""
+        print("⚙️ Enhanced Configuration Status:")
         print(f"   Database: {'✅' if self.PG_DSN else '❌'} {'(set)' if self.PG_DSN else '(missing)'}")
         print(f"   Weather API: {'✅' if self.OPENWEATHER_API_KEY else '❌'} {'(set)' if self.OPENWEATHER_API_KEY else '(missing)'}")
         print(f"   Output Directory: {'✅' if Path(self.OUTPUT_DIR).exists() else '❌'} {self.OUTPUT_DIR}")
         print(f"   Debug Mode: {'🐛' if self.DEBUG else '📊'} {'ON' if self.DEBUG else 'OFF'}")
+        
+        # Enhanced feature status
+        print(f"\n🎛️ Enhanced Features:")
+        print(f"   Weather Analysis: {'✅' if self.ENABLE_WEATHER else '❌'}")
+        print(f"   Venue Factors: {'✅' if self.ENABLE_VENUE_FACTORS else '❌'}")
+        print(f"   Recent Stats: {'✅' if self.ENABLE_RECENT_STATS else '❌'}")
+        print(f"   Game Info: {'✅' if self.ENABLE_GAME_INFO else '❌'}")
+        print(f"   Pitcher Workload: {'✅' if self.ENABLE_PITCHER_WORKLOAD else '❌'}")
+        print(f"   Team Form Analysis: {'✅' if self.ENABLE_TEAM_FORM_ANALYSIS else '❌'}")
+        print(f"   Ballpark Adjustments: {'✅' if self.ENABLE_BALLPARK_ADJUSTMENTS else '❌'}")
+    
+    def get_enabled_features(self) -> List[str]:
+        """Get list of enabled enhanced features"""
+        features = []
+        
+        feature_mapping = {
+            'weather_analysis': self.ENABLE_WEATHER,
+            'umpire_analysis': self.ENABLE_UMPIRE_ANALYSIS,
+            'venue_factors': self.ENABLE_VENUE_FACTORS,
+            'recent_stats': self.ENABLE_RECENT_STATS,
+            'game_info': self.ENABLE_GAME_INFO,
+            'pitcher_workload': self.ENABLE_PITCHER_WORKLOAD,
+            'team_form_analysis': self.ENABLE_TEAM_FORM_ANALYSIS,
+            'ballpark_adjustments': self.ENABLE_BALLPARK_ADJUSTMENTS,
+        }
+        
+        for feature_name, enabled in feature_mapping.items():
+            if enabled:
+                features.append(feature_name)
+        
+        return features
 
 # Global configuration instance
 config = Config()
@@ -210,7 +280,7 @@ def require_config(require_weather: bool = False, require_database: bool = True)
                            require_database=require_database)
     
     if issues:
-        print("❌ Configuration validation failed:")
+        print("❌ Enhanced configuration validation failed:")
         for issue in issues:
             print(f"   • {issue}")
         
@@ -228,7 +298,9 @@ def require_config(require_weather: bool = False, require_database: bool = True)
             print("   3. Create missing directories:")
             print(f"      mkdir -p {config.OUTPUT_DIR} {config.MIGRATIONS_DIR}")
         
-        print("\n   4. See .env.example for all available settings")
+        print("\n   4. Copy enhanced environment template:")
+        print("      cp .env.enhanced_example .env")
+        print("      # Then edit .env with your actual values")
         
         sys.exit(1)
     

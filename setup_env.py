@@ -5,6 +5,7 @@ Interactive environment setup for MLB betting analysis
 import os
 import sys
 from pathlib import Path
+from datetime import datetime  # ADD THIS LINE
 import getpass
 
 def setup_environment():
@@ -50,6 +51,11 @@ def setup_environment():
     debug = input("Enable debug mode? (y/N): ").strip().lower()
     env_vars['DEBUG'] = 'true' if debug in ['y', 'yes'] else 'false'
     
+    # Create directories if they don't exist
+    Path(output_dir).mkdir(exist_ok=True)
+    Path('migrations').mkdir(exist_ok=True)
+    Path('logs').mkdir(exist_ok=True)
+    
     # Create .env file
     env_file = Path('.env')
     print(f"\n📝 Creating {env_file}...")
@@ -72,7 +78,7 @@ def setup_environment():
     
     try:
         from py.config import require_config
-        config = require_config(require_weather=weather_key != "")
+        config = require_config(require_weather=bool(weather_key), require_database=False)  # Don't require DB connection for setup
         
         # Test database
         if config.PG_DSN:
@@ -92,6 +98,7 @@ def setup_environment():
         
     except Exception as e:
         print(f"❌ Configuration test failed: {e}")
+        print("⚠️ You may need to install dependencies: pip install -r py/requirements.txt")
         return False
     
     return True

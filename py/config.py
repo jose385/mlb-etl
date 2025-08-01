@@ -160,20 +160,21 @@ class Config:
         required_parts = ['@', '/', ':']
         return all(part in self.PG_DSN for part in required_parts)
     
-    def test_database_connection(self) -> tuple[bool, str]:
-        """Test database connection without importing psycopg2 in config"""
+    def get_database_manager(self) -> 'DatabaseManager':
+        """Get database manager instance"""
         if not self.PG_DSN:
-            return False, "PG_DSN not set"
-        
+            raise ConfigError("PG_DSN not configured")
+    
+        from .database import DatabaseManager
+        return DatabaseManager(self.PG_DSN)
+
+    def test_database_connection(self) -> tuple[bool, str]:
+        """Test database connection with retry logic"""
         try:
-            import psycopg2
-            conn = psycopg2.connect(self.PG_DSN)
-            conn.close()
-            return True, "Connection successful"
-        except ImportError:
-            return False, "psycopg2 not installed"
+            db_manager = self.get_database_manager()
+            return db_manager.test_connection()
         except Exception as e:
-            return False, f"Connection failed: {e}"
+            return False, f"Database manager creation failed: {e}"
     
     def test_weather_api(self) -> tuple[bool, str]:
         """Test weather API key"""

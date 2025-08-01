@@ -1,6 +1,7 @@
 -- migrations/001_enhanced_simple_schema.sql
 -- Enhanced consolidated schema for comprehensive MLB betting analysis
 -- 9 tables optimized for betting decisions while staying streamlined
+-- UPDATED: Made idempotent with proper DROP statements
 
 CREATE SCHEMA IF NOT EXISTS public;
 
@@ -8,7 +9,8 @@ CREATE SCHEMA IF NOT EXISTS public;
 -- GAMES TABLE (Simplified Statcast Data)
 -- Core game data with essential columns for betting analysis
 -- =============================================================================
-CREATE TABLE IF NOT EXISTS public.games (
+DROP TABLE IF EXISTS public.games CASCADE;
+CREATE TABLE public.games (
   -- Core identifiers
   game_date               DATE              NOT NULL,
   game_pk                 BIGINT            NOT NULL,
@@ -60,10 +62,65 @@ CREATE TABLE IF NOT EXISTS public.games (
 );
 
 -- =============================================================================
+-- GAME_INFO TABLE (Enhanced Game Results & Context)
+-- Clean game results with starting pitchers and context - CRITICAL for betting
+-- MOVED BEFORE OTHER TABLES FOR FOREIGN KEY REFERENCES
+-- =============================================================================
+DROP TABLE IF EXISTS public.game_info CASCADE;
+CREATE TABLE public.game_info (
+  -- Core identifiers
+  game_pk INTEGER PRIMARY KEY,
+  game_date DATE NOT NULL,
+  
+  -- Teams and results
+  home_team TEXT NOT NULL,
+  away_team TEXT NOT NULL,
+  home_score INTEGER,
+  away_score INTEGER,
+  winning_team TEXT,
+  
+  -- Game context
+  game_length_minutes INTEGER,
+  attendance INTEGER,
+  game_status TEXT, -- 'Final', 'Postponed', 'Suspended', etc.
+  
+  -- Starting pitchers (CRITICAL for betting lines)
+  home_starting_pitcher INTEGER,
+  away_starting_pitcher INTEGER,
+  home_starter_name TEXT,
+  away_starter_name TEXT,
+  
+  -- Team context affecting performance
+  series_game_number INTEGER, -- Game 1, 2, 3 of series
+  home_team_rest_days INTEGER, -- Days since last game
+  away_team_rest_days INTEGER,
+  
+  -- Venue and conditions
+  venue_name TEXT,
+  game_time_et TEXT, -- Start time affects attendance/energy
+  day_night TEXT, -- Day/Night game affects hitting
+  
+  -- Season context
+  home_wins_before INTEGER, -- Team record going into game
+  home_losses_before INTEGER,
+  away_wins_before INTEGER,
+  away_losses_before INTEGER,
+  
+  -- Betting context flags
+  blowout_game BOOLEAN GENERATED ALWAYS AS (ABS(COALESCE(home_score, 0) - COALESCE(away_score, 0)) >= 7) STORED,
+  extra_innings BOOLEAN,
+  pitcher_duel BOOLEAN GENERATED ALWAYS AS ((COALESCE(home_score, 0) + COALESCE(away_score, 0)) <= 5) STORED,
+  
+  -- Data quality
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- =============================================================================
 -- PLAY_BY_PLAY TABLE (Essential Game Context)
 -- Simplified play-by-play for game flow and situational analysis
 -- =============================================================================
-CREATE TABLE IF NOT EXISTS public.play_by_play (
+DROP TABLE IF EXISTS public.play_by_play CASCADE;
+CREATE TABLE public.play_by_play (
   -- Core identifiers
   game_date        DATE              NOT NULL,
   game_pk          INTEGER           NOT NULL,
@@ -117,7 +174,8 @@ CREATE TABLE IF NOT EXISTS public.play_by_play (
 -- WEATHER TABLE (Critical for Betting)
 -- Weather conditions that significantly impact game outcomes
 -- =============================================================================
-CREATE TABLE IF NOT EXISTS public.weather (
+DROP TABLE IF EXISTS public.weather CASCADE;
+CREATE TABLE public.weather (
   -- Game identifiers
   game_date DATE NOT NULL,
   game_pk INTEGER NOT NULL,
@@ -154,7 +212,8 @@ CREATE TABLE IF NOT EXISTS public.weather (
 -- UMPIRES TABLE (Impacts Totals Significantly)
 -- Umpire assignments and their historical impact on game totals
 -- =============================================================================
-CREATE TABLE IF NOT EXISTS public.umpires (
+DROP TABLE IF EXISTS public.umpires CASCADE;
+CREATE TABLE public.umpires (
   -- Game identifiers
   game_date DATE NOT NULL,
   game_pk INTEGER NOT NULL,
@@ -191,7 +250,8 @@ CREATE TABLE IF NOT EXISTS public.umpires (
 -- LINEUPS TABLE (Simplified - Who's Playing and Batting Order)
 -- Essential lineup info without excessive stat flattening
 -- =============================================================================
-CREATE TABLE IF NOT EXISTS public.lineups (
+DROP TABLE IF EXISTS public.lineups CASCADE;
+CREATE TABLE public.lineups (
   -- Core identifiers
   game_date         DATE              NOT NULL,
   game_pk           INTEGER           NOT NULL,
@@ -235,7 +295,8 @@ CREATE TABLE IF NOT EXISTS public.lineups (
 -- ROSTERS TABLE (Basic Player Identification)
 -- Simple player identification without excessive detail
 -- =============================================================================
-CREATE TABLE IF NOT EXISTS public.rosters (
+DROP TABLE IF EXISTS public.rosters CASCADE;
+CREATE TABLE public.rosters (
   -- Core identifiers
   game_date         DATE              NOT NULL,
   team_id           INTEGER           NOT NULL,
@@ -260,101 +321,11 @@ CREATE TABLE IF NOT EXISTS public.rosters (
 );
 
 -- =============================================================================
--- INDEXES FOR PERFORMANCE
--- =============================================================================
-
--- Games table indexes
-CREATE INDEX IF NOT EXISTS idx_games_date ON public.games(game_date);
-CREATE INDEX IF NOT EXISTS idx_games_pk ON public.games(game_pk);
-CREATE INDEX IF NOT EXISTS idx_games_pitcher ON public.games(pitcher);
-CREATE INDEX IF NOT EXISTS idx_games_teams ON public.games(home_team, away_team);
-CREATE INDEX IF NOT EXISTS idx_games_events ON public.games(events);
-
--- Play-by-play indexes
-CREATE INDEX IF NOT EXISTS idx_playlog_date ON public.play_by_play(game_date);
-CREATE INDEX IF NOT EXISTS idx_playlog_pk ON public.play_by_play(game_pk);
-CREATE INDEX IF NOT EXISTS idx_playlog_late_inning ON public.play_by_play(late_inning);
-CREATE INDEX IF NOT EXISTS idx_playlog_close_game ON public.play_by_play(close_game);
-
--- Weather indexes
-CREATE INDEX IF NOT EXISTS idx_weather_date ON public.weather(game_date);
-CREATE INDEX IF NOT EXISTS idx_weather_impact ON public.weather(weather_impact_score);
-CREATE INDEX IF NOT EXISTS idx_weather_temperature ON public.weather(temperature_f);
-
--- Umpire indexes (focus on home plate)
-CREATE INDEX IF NOT EXISTS idx_umpires_date ON public.umpires(game_date);
-CREATE INDEX IF NOT EXISTS idx_umpires_home_plate ON public.umpires(position) WHERE position = 'Home Plate';
-CREATE INDEX IF NOT EXISTS idx_umpires_over_under ON public.umpires(over_under_record);
-CREATE INDEX IF NOT EXISTS idx_umpires_name ON public.umpires(umpire_name);
-
--- Lineup indexes
-CREATE INDEX IF NOT EXISTS idx_lineups_date ON public.lineups(game_date);
-CREATE INDEX IF NOT EXISTS idx_lineups_pk ON public.lineups(game_pk);
-CREATE INDEX IF NOT EXISTS idx_lineups_order ON public.lineups(batting_order);
-CREATE INDEX IF NOT EXISTS idx_lineups_power ON public.lineups(is_power_hitter);
-
--- Roster indexes
-CREATE INDEX IF NOT EXISTS idx_rosters_date ON public.rosters(game_date);
-CREATE INDEX IF NOT EXISTS idx_rosters_team ON public.rosters(team_id);
-CREATE INDEX IF NOT EXISTS idx_rosters_person ON public.rosters(person_id);
-
--- =============================================================================
--- GAME_INFO TABLE (Enhanced Game Results & Context)
--- Clean game results with starting pitchers and context - CRITICAL for betting
--- =============================================================================
-CREATE TABLE IF NOT EXISTS public.game_info (
-  -- Core identifiers
-  game_pk INTEGER PRIMARY KEY,
-  game_date DATE NOT NULL,
-  
-  -- Teams and results
-  home_team TEXT NOT NULL,
-  away_team TEXT NOT NULL,
-  home_score INTEGER,
-  away_score INTEGER,
-  winning_team TEXT,
-  
-  -- Game context
-  game_length_minutes INTEGER,
-  attendance INTEGER,
-  game_status TEXT, -- 'Final', 'Postponed', 'Suspended', etc.
-  
-  -- Starting pitchers (CRITICAL for betting lines)
-  home_starting_pitcher INTEGER,
-  away_starting_pitcher INTEGER,
-  home_starter_name TEXT,
-  away_starter_name TEXT,
-  
-  -- Team context affecting performance
-  series_game_number INTEGER, -- Game 1, 2, 3 of series
-  home_team_rest_days INTEGER, -- Days since last game
-  away_team_rest_days INTEGER,
-  
-  -- Venue and conditions
-  venue_name TEXT,
-  game_time_et TEXT, -- Start time affects attendance/energy
-  day_night TEXT, -- Day/Night game affects hitting
-  
-  -- Season context
-  home_wins_before INTEGER, -- Team record going into game
-  home_losses_before INTEGER,
-  away_wins_before INTEGER,
-  away_losses_before INTEGER,
-  
-  -- Betting context flags
-  blowout_game BOOLEAN GENERATED ALWAYS AS (ABS(COALESCE(home_score, 0) - COALESCE(away_score, 0)) >= 7) STORED,
-  extra_innings BOOLEAN,
-  pitcher_duel BOOLEAN GENERATED ALWAYS AS ((COALESCE(home_score, 0) + COALESCE(away_score, 0)) <= 5) STORED,
-  
-  -- Data quality
-  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-
--- =============================================================================
 -- RECENT_STATS TABLE (Pre-calculated Performance Trends)
 -- Recent form analysis - eliminates complex on-the-fly calculations
 -- =============================================================================
-CREATE TABLE IF NOT EXISTS public.recent_stats (
+DROP TABLE IF EXISTS public.recent_stats CASCADE;
+CREATE TABLE public.recent_stats (
   -- Core identifiers
   stat_date DATE NOT NULL,
   player_id INTEGER NOT NULL,
@@ -410,7 +381,8 @@ CREATE TABLE IF NOT EXISTS public.recent_stats (
 -- VENUE_FACTORS TABLE (Enhanced Ballpark Information)
 -- Comprehensive park factors beyond weather - essential for accurate totals
 -- =============================================================================
-CREATE TABLE IF NOT EXISTS public.venue_factors (
+DROP TABLE IF EXISTS public.venue_factors CASCADE;
+CREATE TABLE public.venue_factors (
   -- Core identification
   venue_name TEXT PRIMARY KEY,
   home_team TEXT NOT NULL,
@@ -465,34 +437,139 @@ CREATE TABLE IF NOT EXISTS public.venue_factors (
 );
 
 -- =============================================================================
--- INDEXES FOR ENHANCED PERFORMANCE
+-- INDEXES FOR PERFORMANCE
 -- =============================================================================
 
+-- Games table indexes
+DROP INDEX IF EXISTS idx_games_date;
+CREATE INDEX idx_games_date ON public.games(game_date);
+
+DROP INDEX IF EXISTS idx_games_pk;
+CREATE INDEX idx_games_pk ON public.games(game_pk);
+
+DROP INDEX IF EXISTS idx_games_pitcher;
+CREATE INDEX idx_games_pitcher ON public.games(pitcher);
+
+DROP INDEX IF EXISTS idx_games_teams;
+CREATE INDEX idx_games_teams ON public.games(home_team, away_team);
+
+DROP INDEX IF EXISTS idx_games_events;
+CREATE INDEX idx_games_events ON public.games(events);
+
+-- Play-by-play indexes
+DROP INDEX IF EXISTS idx_playlog_date;
+CREATE INDEX idx_playlog_date ON public.play_by_play(game_date);
+
+DROP INDEX IF EXISTS idx_playlog_pk;
+CREATE INDEX idx_playlog_pk ON public.play_by_play(game_pk);
+
+DROP INDEX IF EXISTS idx_playlog_late_inning;
+CREATE INDEX idx_playlog_late_inning ON public.play_by_play(late_inning);
+
+DROP INDEX IF EXISTS idx_playlog_close_game;
+CREATE INDEX idx_playlog_close_game ON public.play_by_play(close_game);
+
+-- Weather indexes
+DROP INDEX IF EXISTS idx_weather_date;
+CREATE INDEX idx_weather_date ON public.weather(game_date);
+
+DROP INDEX IF EXISTS idx_weather_impact;
+CREATE INDEX idx_weather_impact ON public.weather(weather_impact_score);
+
+DROP INDEX IF EXISTS idx_weather_temperature;
+CREATE INDEX idx_weather_temperature ON public.weather(temperature_f);
+
+-- Umpire indexes (focus on home plate)
+DROP INDEX IF EXISTS idx_umpires_date;
+CREATE INDEX idx_umpires_date ON public.umpires(game_date);
+
+DROP INDEX IF EXISTS idx_umpires_home_plate;
+CREATE INDEX idx_umpires_home_plate ON public.umpires(position) WHERE position = 'Home Plate';
+
+DROP INDEX IF EXISTS idx_umpires_over_under;
+CREATE INDEX idx_umpires_over_under ON public.umpires(over_under_record);
+
+DROP INDEX IF EXISTS idx_umpires_name;
+CREATE INDEX idx_umpires_name ON public.umpires(umpire_name);
+
+-- Lineup indexes
+DROP INDEX IF EXISTS idx_lineups_date;
+CREATE INDEX idx_lineups_date ON public.lineups(game_date);
+
+DROP INDEX IF EXISTS idx_lineups_pk;
+CREATE INDEX idx_lineups_pk ON public.lineups(game_pk);
+
+DROP INDEX IF EXISTS idx_lineups_order;
+CREATE INDEX idx_lineups_order ON public.lineups(batting_order);
+
+DROP INDEX IF EXISTS idx_lineups_power;
+CREATE INDEX idx_lineups_power ON public.lineups(is_power_hitter);
+
+-- Roster indexes
+DROP INDEX IF EXISTS idx_rosters_date;
+CREATE INDEX idx_rosters_date ON public.rosters(game_date);
+
+DROP INDEX IF EXISTS idx_rosters_team;
+CREATE INDEX idx_rosters_team ON public.rosters(team_id);
+
+DROP INDEX IF EXISTS idx_rosters_person;
+CREATE INDEX idx_rosters_person ON public.rosters(person_id);
+
 -- Game_info indexes
-CREATE INDEX IF NOT EXISTS idx_game_info_date ON public.game_info(game_date);
-CREATE INDEX IF NOT EXISTS idx_game_info_teams ON public.game_info(home_team, away_team);
-CREATE INDEX IF NOT EXISTS idx_game_info_starters ON public.game_info(home_starting_pitcher, away_starting_pitcher);
-CREATE INDEX IF NOT EXISTS idx_game_info_venue ON public.game_info(venue_name);
-CREATE INDEX IF NOT EXISTS idx_game_info_status ON public.game_info(game_status);
+DROP INDEX IF EXISTS idx_game_info_date;
+CREATE INDEX idx_game_info_date ON public.game_info(game_date);
+
+DROP INDEX IF EXISTS idx_game_info_teams;
+CREATE INDEX idx_game_info_teams ON public.game_info(home_team, away_team);
+
+DROP INDEX IF EXISTS idx_game_info_starters;
+CREATE INDEX idx_game_info_starters ON public.game_info(home_starting_pitcher, away_starting_pitcher);
+
+DROP INDEX IF EXISTS idx_game_info_venue;
+CREATE INDEX idx_game_info_venue ON public.game_info(venue_name);
+
+DROP INDEX IF EXISTS idx_game_info_status;
+CREATE INDEX idx_game_info_status ON public.game_info(game_status);
 
 -- Recent_stats indexes
-CREATE INDEX IF NOT EXISTS idx_recent_stats_player_date ON public.recent_stats(player_id, stat_date DESC);
-CREATE INDEX IF NOT EXISTS idx_recent_stats_type ON public.recent_stats(stat_type);
-CREATE INDEX IF NOT EXISTS idx_recent_stats_hot_streak ON public.recent_stats(hot_streak) WHERE hot_streak = TRUE;
-CREATE INDEX IF NOT EXISTS idx_recent_stats_cold_streak ON public.recent_stats(cold_streak) WHERE cold_streak = TRUE;
-CREATE INDEX IF NOT EXISTS idx_recent_stats_batting ON public.recent_stats(stat_type, ops) WHERE stat_type LIKE 'batting%';
-CREATE INDEX IF NOT EXISTS idx_recent_stats_pitching ON public.recent_stats(stat_type, era) WHERE stat_type LIKE 'pitching%';
+DROP INDEX IF EXISTS idx_recent_stats_player_date;
+CREATE INDEX idx_recent_stats_player_date ON public.recent_stats(player_id, stat_date DESC);
+
+DROP INDEX IF EXISTS idx_recent_stats_type;
+CREATE INDEX idx_recent_stats_type ON public.recent_stats(stat_type);
+
+DROP INDEX IF EXISTS idx_recent_stats_hot_streak;
+CREATE INDEX idx_recent_stats_hot_streak ON public.recent_stats(hot_streak) WHERE hot_streak = TRUE;
+
+DROP INDEX IF EXISTS idx_recent_stats_cold_streak;
+CREATE INDEX idx_recent_stats_cold_streak ON public.recent_stats(cold_streak) WHERE cold_streak = TRUE;
+
+DROP INDEX IF EXISTS idx_recent_stats_batting;
+CREATE INDEX idx_recent_stats_batting ON public.recent_stats(stat_type, ops) WHERE stat_type LIKE 'batting%';
+
+DROP INDEX IF EXISTS idx_recent_stats_pitching;
+CREATE INDEX idx_recent_stats_pitching ON public.recent_stats(stat_type, era) WHERE stat_type LIKE 'pitching%';
 
 -- Venue_factors indexes
-CREATE INDEX IF NOT EXISTS idx_venue_factors_team ON public.venue_factors(home_team);
-CREATE INDEX IF NOT EXISTS idx_venue_factors_run_factor ON public.venue_factors(run_factor);
-CREATE INDEX IF NOT EXISTS idx_venue_factors_hr_factor ON public.venue_factors(hr_factor);
-CREATE INDEX IF NOT EXISTS idx_venue_factors_pitcher_friendly ON public.venue_factors(pitcher_friendly_score);
+DROP INDEX IF EXISTS idx_venue_factors_team;
+CREATE INDEX idx_venue_factors_team ON public.venue_factors(home_team);
+
+DROP INDEX IF EXISTS idx_venue_factors_run_factor;
+CREATE INDEX idx_venue_factors_run_factor ON public.venue_factors(run_factor);
+
+DROP INDEX IF EXISTS idx_venue_factors_hr_factor;
+CREATE INDEX idx_venue_factors_hr_factor ON public.venue_factors(hr_factor);
+
+DROP INDEX IF EXISTS idx_venue_factors_pitcher_friendly;
+CREATE INDEX idx_venue_factors_pitcher_friendly ON public.venue_factors(pitcher_friendly_score);
 
 -- Enhanced composite indexes for betting queries
-CREATE INDEX IF NOT EXISTS idx_betting_starters_recent ON public.recent_stats(player_id, stat_type, stat_date) 
+DROP INDEX IF EXISTS idx_betting_starters_recent;
+CREATE INDEX idx_betting_starters_recent ON public.recent_stats(player_id, stat_type, stat_date) 
   WHERE stat_type IN ('pitching_5starts', 'pitching_15d');
-CREATE INDEX IF NOT EXISTS idx_betting_hitters_recent ON public.recent_stats(player_id, stat_type, ops) 
+
+DROP INDEX IF EXISTS idx_betting_hitters_recent;
+CREATE INDEX idx_betting_hitters_recent ON public.recent_stats(player_id, stat_type, ops) 
   WHERE stat_type IN ('batting_7d', 'batting_15d') AND ops IS NOT NULL;
 
 -- =============================================================================

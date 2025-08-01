@@ -21,13 +21,13 @@ class EnhancedBettingDataRetriever:
         self.connection_string = connection_string
         self.logger = logging.getLogger(__name__)
     
+        # Initialize database manager
+        from py.database import DatabaseManager
+        self.db_manager = DatabaseManager(connection_string)
+
     def get_connection(self):
         """Get database connection with proper error handling"""
-        try:
-            return psycopg2.connect(self.connection_string)
-        except Exception as e:
-            self.logger.error(f"Database connection failed: {e}")
-            raise
+        return self.db_manager.get_connection()
     
     def get_game_context(self, game_pk: int) -> Dict:
         """NEW: Get comprehensive game context from game_info table"""

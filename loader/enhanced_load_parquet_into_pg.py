@@ -99,14 +99,10 @@ def connect():
     config = require_config(require_database=True)
     
     try:
-        conn = psycopg2.connect(config.PG_DSN)
-        conn.autocommit = True
-        if config.VERBOSE:
-            print(f"✅ Database connection successful")
-        return conn
+        db_manager = config.get_database_manager()
+        return db_manager.get_connection()
     except Exception as e:
         print(f"❌ Database connection failed: {e}")
-        print(f"   DSN: {config.PG_DSN[:50]}...")
         raise
 
 

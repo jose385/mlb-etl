@@ -259,6 +259,45 @@ class Config:
                 features.append(feature_name)
         
         return features
+    
+    def get_schema_manager(self):
+        """Get schema migration manager"""
+        from .schema_manager import SchemaMigrationManager
+        db_manager = self.get_database_manager()
+        return SchemaMigrationManager(db_manager, self.MIGRATIONS_DIR)
+
+    def initialize_database(self, reset: bool = False) -> bool:
+        """Initialize database with proper schema"""
+        try:
+            schema_manager = self.get_schema_manager()
+        
+            if reset:
+                print("🚨 WARNING: This will delete ALL data!")
+                confirm = input("Type 'DELETE ALL DATA' to confirm: ")
+                if confirm == "DELETE ALL DATA":
+                    schema_manager.reset_schema(confirm=True)
+                else:
+                    print("❌ Schema reset cancelled")
+                    return False
+        
+            results = schema_manager.run_migrations()
+        
+            success_count = sum(1 for success in results.values() if success)
+            total_count = len(results)
+        
+            print(f"📊 Migration results: {success_count}/{total_count} successful")
+        
+            if success_count == total_count:
+                print("✅ Database schema initialized successfully")
+                return True
+            else:
+                print("❌ Some migrations failed")
+                return False
+            
+        except Exception as e:
+            print(f"❌ Database initialization failed: {e}")
+            return False
+
 
 # Global configuration instance
 config = Config()

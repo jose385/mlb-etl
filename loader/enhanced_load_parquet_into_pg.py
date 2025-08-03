@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """
-enhanced_load_parquet_into_pg.py – Updated loader for enhanced schema
+enhanced_load_parquet_into_pg.py – Updated loader for enhanced schema with S3 integration
 Maps files to correct tables for the 9-table enhanced schema
+Supports loading from local files and S3
 
 Usage:
-    python enhanced_load_parquet_into_pg.py [--input-dir DIR] [--tables T1 T2 ...]
+    python enhanced_load_parquet_into_pg.py [--input-dir DIR] [--tables T1 T2 ...] [--from-s3]
 """
 import os
 import argparse
@@ -12,6 +13,7 @@ import io
 import time
 from pathlib import Path
 from functools import wraps
+from typing import List
 from py.config import require_config
 
 import pandas as pd
@@ -47,50 +49,65 @@ def retry_database_operation(max_retries=3, delay=1):
 
 def get_enhanced_table_mapping(file_stem: str) -> str:
     """
-    Enhanced table mapping for the 9-table schema
-    Maps file prefixes to correct table names
+    UPDATED: Enhanced table mapping that handles all filename patterns correctly
+    Maps file prefixes to correct table names for the 9-table schema
     """
-    base = file_stem.split("_", 1)[0]
+    # Handle exact filename matches first (for files like "venue_factors.parquet")
+    exact_matches = {
+        "venue_factors": "venue_factors",
+        "recent_stats": "recent_stats",
+    }
+    
+    if file_stem in exact_matches:
+        return exact_matches[file_stem]
+    
+    # Handle date-suffixed files (like "games_2024-07-15")
+    # Split on first underscore to get the data type
+    parts = file_stem.split("_")
+    if len(parts) >= 2:
+        # Check if last part looks like a date (YYYY-MM-DD)
+        last_part = parts[-1]
+        if len(last_part) == 10 and last_part.count('-') == 2:
+            # This is a date-suffixed file, get everything before the date
+            base_name = "_".join(parts[:-1])
+        else:
+            # Not a date-suffixed file, use first part
+            base_name = parts[0]
+    else:
+        # Single part filename
+        base_name = file_stem
     
     # Enhanced schema table mappings
     table_mapping = {
-        # Core existing tables (with name changes)
-        "games": "games",                    # CHANGED: was statcast → games
-        "play": "play_by_play",             # CHANGED: was statsapi → play_by_play
-        "weather": "weather",                # UNCHANGED
-        "umpires": "umpires",               # UNCHANGED
-        "umpire": "umpires",                # UNCHANGED
-        "lineups": "lineups",               # CHANGED: was lineup → lineups
-        "rosters": "rosters",               # CHANGED: was roster → rosters
+        # Primary mappings (exact matches)
+        "games": "games",
+        "play_by_play": "play_by_play", 
+        "game_info": "game_info",
+        "weather": "weather",
+        "umpires": "umpires",
+        "lineups": "lineups",
+        "rosters": "rosters",
+        "recent_stats": "recent_stats",
+        "venue_factors": "venue_factors",
         
-        # New enhanced tables
-        "game": "game_info",                # NEW: game_info files
-        "recent": "recent_stats",           # NEW: recent_stats files
-        "venue": "venue_factors",           # NEW: venue_factors files
+        # Alternative patterns that might be created
+        "play": "play_by_play",  # Handle "play_by_play" -> "play" mapping
+        "game": "game_info",     # Handle "game_info" -> "game" mapping
+        "umpire": "umpires",     # Handle singular/plural
+        "lineup": "lineups",     # Handle singular/plural
+        "roster": "rosters",     # Handle singular/plural
         
-        # Legacy mappings (for backward compatibility)
-        "statcast": "games",                # Legacy support
-        "statsapi": "play_by_play",         # Legacy support
-        "lineup": "lineups",                # Legacy support  
-        "roster": "rosters",                # Legacy support
+        # Legacy support (if old naming is still used somewhere)
+        "statcast": "games",     # Legacy Statcast files -> games table
+        "statsapi": "play_by_play",  # Legacy StatsAPI files -> play_by_play table
     }
     
-    # Handle multi-word prefixes
-    if "play_by_play" in file_stem:
-        return "play_by_play"
-    elif "game_info" in file_stem:
-        return "game_info"
-    elif "recent_stats" in file_stem:
-        return "recent_stats"
-    elif "venue_factors" in file_stem:
-        return "venue_factors"
+    if base_name in table_mapping:
+        return table_mapping[base_name]
     
-    # Single word mappings
-    if base in table_mapping:
-        return table_mapping[base]
-    
-    # Default fallback
-    return base.rstrip("s")
+    # Fallback: return the base name if no mapping found
+    print(f"⚠️ Warning: No table mapping found for '{file_stem}', using '{base_name}'")
+    return base_name
 
 
 @retry_database_operation(max_retries=3, delay=2)
@@ -123,7 +140,7 @@ def get_table_columns(conn, table: str):
 
 @retry_database_operation(max_retries=2, delay=1)
 def load_table(conn, table: str, df: pd.DataFrame):
-    """Load data into table with enhanced error handling"""
+    """UPDATED: Load data into table with enhanced error handling and type conversion"""
     # Get existing table columns
     existing = set(get_table_columns(conn, table))
     
@@ -134,9 +151,12 @@ def load_table(conn, table: str, df: pd.DataFrame):
         print(f"⚠️  After pruning, no columns remain for table '{table}', skipping")
         return
     
-    # Show column mapping info
+    # Show detailed column mapping info
     missing_in_table = set(df.columns) - existing
     missing_in_data = existing - set(df.columns)
+    
+    print(f"   📊 Table: {table}")
+    print(f"   📥 Loading {len(to_load)} columns: {sorted(to_load)}")
     
     if missing_in_table:
         print(f"   📋 Columns in data but not in table: {sorted(missing_in_table)}")
@@ -144,13 +164,30 @@ def load_table(conn, table: str, df: pd.DataFrame):
         print(f"   📋 Columns in table but not in data: {sorted(missing_in_data)}")
     
     # Prepare data for loading
+    df_to_load = df[to_load].copy()
+    
+    # Handle data type conversions for PostgreSQL compatibility
+    for col in df_to_load.columns:
+        # Convert boolean-like values
+        if df_to_load[col].dtype == 'object':
+            # Handle common boolean representations
+            bool_map = {'true': True, 'false': False, 'True': True, 'False': False,
+                       'yes': True, 'no': False, 'Y': True, 'N': False}
+            if df_to_load[col].isin(bool_map.keys()).any():
+                df_to_load[col] = df_to_load[col].map(bool_map).fillna(df_to_load[col])
+        
+        # Handle nullable integer columns
+        if str(df_to_load[col].dtype).startswith('Int'):
+            df_to_load[col] = df_to_load[col].astype('float64')  # Use float to preserve NaN
+    
+    # Create CSV buffer
     buf = io.StringIO()
-    df[to_load].to_csv(buf, index=False, header=False)
+    df_to_load.to_csv(buf, index=False, header=False, na_rep='\\N')  # Use PostgreSQL NULL representation
     buf.seek(0)
     
     cols_csv = ", ".join(to_load)
     temp_table = f"temp_{table}_{int(time.time())}"
-    copy_sql = f"COPY {temp_table} ({cols_csv}) FROM STDIN WITH (FORMAT CSV)"
+    copy_sql = f"COPY {temp_table} ({cols_csv}) FROM STDIN WITH (FORMAT CSV, NULL '\\N')"
     
     cur = conn.cursor()
     
@@ -161,6 +198,7 @@ def load_table(conn, table: str, df: pd.DataFrame):
         
         # Load data into temp table
         cur.copy_expert(copy_sql, buf)
+        temp_rows = cur.rowcount
         
         # Handle different table types with appropriate conflict resolution
         if table in ["game_info", "venue_factors"]:
@@ -191,7 +229,7 @@ def load_table(conn, table: str, df: pd.DataFrame):
         cur.execute(insert_sql)
         rows_affected = cur.rowcount
         
-        print(f"✅ Loaded {rows_affected} rows → public.{table} ({len(to_load)} cols)")
+        print(f"✅ Loaded {rows_affected} rows → public.{table} (from {temp_rows} temp rows)")
         
         # Clean up temp table
         cur.execute(f"DROP TABLE IF EXISTS {temp_table}")
@@ -225,15 +263,50 @@ def validate_enhanced_schema(conn):
     
     if missing_tables:
         print(f"⚠️  Missing enhanced schema tables: {sorted(missing_tables)}")
-        print(f"   Run: psql -f migrations/001_enhanced_simple_schema.sql")
+        print(f"   Run: python initialize_database.py")
         return False
     
     print(f"✅ Enhanced schema validated: {len(expected_tables)} tables found")
     return True
 
 
-def show_loading_summary(files, successful_loads, failed_loads, total_rows_loaded):
-    """Enhanced loading summary"""
+def load_from_s3_if_available(input_dir: Path, s3_manager=None) -> List[Path]:
+    """Load parquet files from S3 if available, otherwise use local files"""
+    local_files = list(input_dir.glob("*.parquet"))
+    
+    if not s3_manager:
+        return local_files
+    
+    print("🌐 Checking S3 for additional parquet files...")
+    s3_files = s3_manager.list_parquet_files()
+    
+    downloaded_count = 0
+    for s3_key in s3_files:
+        filename = Path(s3_key).name
+        local_file = input_dir / filename
+        
+        if not local_file.exists():
+            print(f"📥 Downloading {filename} from S3...")
+            if s3_manager.download_parquet(s3_key, local_file):
+                downloaded_count += 1
+    
+    if downloaded_count > 0:
+        print(f"📥 Downloaded {downloaded_count} files from S3")
+    
+    return list(input_dir.glob("*.parquet"))
+
+
+def upload_results_to_s3(input_dir: Path, s3_manager=None) -> int:
+    """Upload any remaining local files to S3"""
+    if not s3_manager:
+        return 0
+    
+    print("📤 Uploading local files to S3...")
+    return s3_manager.upload_directory(input_dir)
+
+
+def show_loading_summary(files, successful_loads, failed_loads, total_rows_loaded, s3_enabled=False):
+    """Enhanced loading summary with S3 information"""
     print(f"\n🎉 Enhanced loading complete!")
     print(f"📊 Summary:")
     print(f"   📁 Files processed: {len(files)}")
@@ -244,16 +317,20 @@ def show_loading_summary(files, successful_loads, failed_loads, total_rows_loade
     success_rate = (successful_loads / len(files)) * 100 if files else 0
     print(f"   📊 Success rate: {success_rate:.1f}%")
     
+    if s3_enabled:
+        print(f"   ☁️ S3 integration: enabled")
+    
     if failed_loads > 0:
         print(f"\n⚠️  {failed_loads} files failed to load. Check error messages above.")
     
     print(f"\n💡 Next steps:")
-    print(f"   1. Run analysis: python enhanced_simple_analysis.py")
+    print(f"   1. Run analysis: python py/enhanced_simple_analysis.py")
     print(f"   2. Check data quality: SELECT COUNT(*) FROM games;")
+    print(f"   3. Validate loading: SELECT table_name, COUNT(*) FROM information_schema.tables WHERE table_schema='public' GROUP BY table_name;")
 
 
 def main():
-    p = argparse.ArgumentParser(description="Enhanced MLB data loader for 9-table schema")
+    p = argparse.ArgumentParser(description="Enhanced MLB data loader for 9-table schema with S3 integration")
     p.add_argument(
         "--input-dir",
         default="stage",
@@ -270,11 +347,29 @@ def main():
         help="Validate enhanced schema before loading"
     )
     p.add_argument(
+        "--from-s3",
+        action="store_true",
+        help="Download files from S3 before loading"
+    )
+    p.add_argument(
+        "--upload-to-s3",
+        action="store_true", 
+        help="Upload local files to S3 after processing"
+    )
+    p.add_argument(
         "--debug",
         action="store_true",
         help="Show detailed column mapping info"
     )
     args = p.parse_args()
+    
+    # Get configuration
+    try:
+        from py.config import get_config
+        config = get_config()
+    except Exception as e:
+        print(f"❌ Configuration error: {e}")
+        return
     
     # Connect to database
     try:
@@ -289,12 +384,29 @@ def main():
             print("❌ Schema validation failed")
             return
     
-    # Find parquet files
+    # Setup S3 manager if enabled
+    s3_manager = None
+    try:
+        if config.ENABLE_S3_STORAGE and (args.from_s3 or args.upload_to_s3):
+            s3_manager = config.get_s3_manager()
+            print("✅ S3 integration enabled")
+    except Exception as e:
+        print(f"⚠️ S3 integration not available: {e}")
+    
+    # Setup input directory
     in_dir = Path(args.input_dir)
-    files = sorted(in_dir.glob("*.parquet"))
+    in_dir.mkdir(exist_ok=True)
+    
+    # Load files (from S3 if requested)
+    if args.from_s3 and s3_manager:
+        files = load_from_s3_if_available(in_dir, s3_manager)
+    else:
+        files = list(in_dir.glob("*.parquet"))
     
     if not files:
         print(f"❌ No parquet files found in {in_dir}")
+        if s3_manager:
+            print("💡 Try using --from-s3 to download files from S3")
         return
     
     print(f"📁 Found {len(files)} parquet files in {in_dir}")
@@ -350,8 +462,12 @@ def main():
             failed_loads += 1
             continue
     
+    # Upload to S3 if requested
+    if args.upload_to_s3 and s3_manager:
+        upload_results_to_s3(in_dir, s3_manager)
+    
     # Show summary
-    show_loading_summary(files, successful_loads, failed_loads, total_rows_loaded)
+    show_loading_summary(files, successful_loads, failed_loads, total_rows_loaded, s3_enabled=bool(s3_manager))
     
     conn.close()
 

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-enhanced_simple_backfill.py - Complete Enhanced MLB data collection
+enhanced_simple_backfill.py - Complete Enhanced MLB data collection with S3 integration
 Collects data for the enhanced simplified schema (9 tables)
-Features: Robust error handling, graceful degradation, advanced rate limiting
+Features: Robust error handling, graceful degradation, advanced rate limiting, S3 storage
 
 Usage:
     python enhanced_simple_backfill.py --start YYYY-MM-DD --end YYYY-MM-DD [--output DIR]
@@ -420,12 +420,12 @@ def api_call_with_retry(api_name: str, operation_name: str, call_func, *args, **
 
 def get_output_filename(data_type: str, date_str: str = None) -> str:
     """
-    Standardized file naming that matches loader expectations
-    This ensures enhanced_simple_backfill.py creates files that
-    enhanced_load_parquet_into_pg.py can properly map to tables
+    UPDATED: Standardized file naming that exactly matches loader expectations
+    This ensures backfill creates files that the loader can properly map
     """
+    # Standardized mapping - MUST match loader expectations exactly
     filename_mapping = {
-        # Core data types (date-specific)
+        # Core data types (date-specific) - matches loader table mapping
         'games': f'games_{date_str}.parquet' if date_str else 'games.parquet',
         'play_by_play': f'play_by_play_{date_str}.parquet' if date_str else 'play_by_play.parquet',
         'game_info': f'game_info_{date_str}.parquet' if date_str else 'game_info.parquet',
@@ -434,18 +434,40 @@ def get_output_filename(data_type: str, date_str: str = None) -> str:
         'umpires': f'umpires_{date_str}.parquet' if date_str else 'umpires.parquet',
         'weather': f'weather_{date_str}.parquet' if date_str else 'weather.parquet',
         
-        # One-time data types (no date)
+        # One-time data types (no date needed)
         'venue_factors': 'venue_factors.parquet',
         'recent_stats': f'recent_stats_{date_str}.parquet' if date_str else 'recent_stats.parquet',
-        
-        # Legacy support (in case old names are used)
-        'statcast': f'games_{date_str}.parquet' if date_str else 'games.parquet',
-        'statsapi': f'play_by_play_{date_str}.parquet' if date_str else 'play_by_play.parquet',
-        'lineup': f'lineups_{date_str}.parquet' if date_str else 'lineups.parquet',
-        'roster': f'rosters_{date_str}.parquet' if date_str else 'rosters.parquet',
     }
     
-    return filename_mapping.get(data_type, f'{data_type}_{date_str}.parquet' if date_str else f'{data_type}.parquet')
+    if data_type not in filename_mapping:
+        raise ValueError(f"Unknown data type: {data_type}. Valid types: {list(filename_mapping.keys())}")
+    
+    return filename_mapping[data_type]
+
+# =============================================================================
+# S3 INTEGRATION FUNCTIONS
+# =============================================================================
+
+def upload_to_s3_if_enabled(local_file: Path, data_type: str) -> bool:
+    """Upload file to S3 if S3 storage is enabled"""
+    try:
+        from py.config import get_config
+        config = get_config()
+        
+        if not config.ENABLE_S3_STORAGE or not config.AUTO_UPLOAD_TO_S3:
+            return True
+        
+        s3_manager = config.get_s3_manager()
+        success = s3_manager.upload_parquet(local_file)
+        
+        if success and config.AUTO_CLEANUP_LOCAL:
+            local_file.unlink()  # Delete local file after successful upload
+            print(f"🧹 Cleaned up local file: {local_file.name}")
+        
+        return success
+    except Exception as e:
+        print(f"⚠️ S3 upload failed for {local_file.name}: {e}")
+        return False
 
 # =============================================================================
 # STADIUM DATA AND CONFIGURATIONS
@@ -608,7 +630,7 @@ def safe_data_collection(func):
     return wrapper
 
 def fetch_game_data(date_str: str, out_dir: Path) -> bool:
-    """Fetch basic game data using Statcast with robust error handling"""
+    """Fetch basic game data using Statcast with robust error handling and S3 integration"""
     out_file = out_dir / get_output_filename('games', date_str)
     
     if out_file.exists():
@@ -650,9 +672,17 @@ def fetch_game_data(date_str: str, out_dir: Path) -> bool:
         # Clean column names to match schema
         df_filtered.columns = [col.lower().replace('.', '_') for col in df_filtered.columns]
         
+        # Add game_date if not present
+        if 'game_date' not in df_filtered.columns:
+            df_filtered['game_date'] = date_str
+        
         # Save to parquet
         df_filtered.to_parquet(out_file, index=False)
         print(f"✅ Games: {len(df_filtered)} rows, {len(df_filtered.columns)} columns → {out_file.name}")
+        
+        # Upload to S3 if enabled
+        upload_to_s3_if_enabled(out_file, 'games')
+        
         return True
         
     except Exception as e:
@@ -660,7 +690,7 @@ def fetch_game_data(date_str: str, out_dir: Path) -> bool:
         return False
 
 def fetch_play_by_play_data(date_str: str, out_dir: Path) -> bool:
-    """Fetch play-by-play data with robust error handling"""
+    """Fetch play-by-play data with robust error handling and S3 integration"""
     out_file = out_dir / get_output_filename('play_by_play', date_str)
     
     if out_file.exists():
@@ -750,6 +780,9 @@ def fetch_play_by_play_data(date_str: str, out_dir: Path) -> bool:
             df = pd.DataFrame(play_records)
             df.to_parquet(out_file, index=False)
             print(f"✅ Play-by-play: {len(df)} plays → {out_file.name}")
+            
+            # Upload to S3 if enabled
+            upload_to_s3_if_enabled(out_file, 'play_by_play')
         else:
             print(f"✅ No play-by-play data for {date_str}")
         
@@ -760,7 +793,7 @@ def fetch_play_by_play_data(date_str: str, out_dir: Path) -> bool:
         return False
 
 def fetch_game_info_data(date_str: str, out_dir: Path) -> bool:
-    """Fetch game info with starting pitchers and results"""
+    """Fetch game info with starting pitchers and results with S3 integration"""
     out_file = out_dir / get_output_filename('game_info', date_str)
     
     if out_file.exists():
@@ -866,6 +899,9 @@ def fetch_game_info_data(date_str: str, out_dir: Path) -> bool:
             df = pd.DataFrame(game_info_records)
             df.to_parquet(out_file, index=False)
             print(f"✅ Game info: {len(df)} games → {out_file.name}")
+            
+            # Upload to S3 if enabled
+            upload_to_s3_if_enabled(out_file, 'game_info')
         
         return True
         
@@ -874,7 +910,7 @@ def fetch_game_info_data(date_str: str, out_dir: Path) -> bool:
         return False
 
 def fetch_venue_factors_data(out_dir: Path) -> bool:
-    """One-time setup of venue factors data"""
+    """One-time setup of venue factors data with S3 integration"""
     out_file = out_dir / get_output_filename('venue_factors')
     
     if out_file.exists():
@@ -909,6 +945,9 @@ def fetch_venue_factors_data(out_dir: Path) -> bool:
             df = pd.DataFrame(venue_records)
             df.to_parquet(out_file, index=False)
             print(f"✅ Venue factors: {len(df)} venues → {out_file.name}")
+            
+            # Upload to S3 if enabled
+            upload_to_s3_if_enabled(out_file, 'venue_factors')
         
         return True
         
@@ -917,7 +956,7 @@ def fetch_venue_factors_data(out_dir: Path) -> bool:
         return False
 
 def fetch_lineups_data(date_str: str, out_dir: Path) -> bool:
-    """Fetch lineups data with robust error handling"""
+    """Fetch lineups data with robust error handling and S3 integration"""
     out_file = out_dir / get_output_filename('lineups', date_str)
     
     if out_file.exists():
@@ -1005,6 +1044,9 @@ def fetch_lineups_data(date_str: str, out_dir: Path) -> bool:
             df = pd.DataFrame(lineup_records)
             df.to_parquet(out_file, index=False)
             print(f"✅ Lineups: {len(df)} players → {out_file.name}")
+            
+            # Upload to S3 if enabled
+            upload_to_s3_if_enabled(out_file, 'lineups')
         else:
             print(f"✅ No lineup data for {date_str}")
         
@@ -1015,7 +1057,7 @@ def fetch_lineups_data(date_str: str, out_dir: Path) -> bool:
         return False
 
 def fetch_rosters_data(date_str: str, out_dir: Path) -> bool:
-    """Fetch rosters data with robust error handling"""
+    """Fetch rosters data with robust error handling and S3 integration"""
     out_file = out_dir / get_output_filename('rosters', date_str)
     
     if out_file.exists():
@@ -1092,6 +1134,9 @@ def fetch_rosters_data(date_str: str, out_dir: Path) -> bool:
             df = pd.DataFrame(roster_records)
             df.to_parquet(out_file, index=False)
             print(f"✅ Rosters: {len(df)} players → {out_file.name}")
+            
+            # Upload to S3 if enabled
+            upload_to_s3_if_enabled(out_file, 'rosters')
         else:
             print(f"✅ No roster data for {date_str}")
         
@@ -1102,7 +1147,7 @@ def fetch_rosters_data(date_str: str, out_dir: Path) -> bool:
         return False
 
 def fetch_weather_data(date_str: str, out_dir: Path, api_key: Optional[str] = None) -> bool:
-    """Fetch weather data with robust error handling"""
+    """Fetch weather data with robust error handling and S3 integration"""
     out_file = out_dir / get_output_filename('weather', date_str)
     
     if out_file.exists():
@@ -1196,6 +1241,9 @@ def fetch_weather_data(date_str: str, out_dir: Path, api_key: Optional[str] = No
             df = pd.DataFrame(weather_records)
             df.to_parquet(out_file, index=False)
             print(f"✅ Weather: {len(df)} games → {out_file.name}")
+            
+            # Upload to S3 if enabled
+            upload_to_s3_if_enabled(out_file, 'weather')
         else:
             print(f"✅ No weather data for {date_str}")
         
@@ -1206,7 +1254,7 @@ def fetch_weather_data(date_str: str, out_dir: Path, api_key: Optional[str] = No
         return False
 
 def fetch_umpires_data(date_str: str, out_dir: Path) -> bool:
-    """Fetch umpires data with basic info"""
+    """Fetch umpires data with basic info and S3 integration"""
     out_file = out_dir / get_output_filename('umpires', date_str)
     
     if out_file.exists():
@@ -1251,6 +1299,9 @@ def fetch_umpires_data(date_str: str, out_dir: Path) -> bool:
             df = pd.DataFrame(umpire_records)
             df.to_parquet(out_file, index=False)
             print(f"✅ Umpires: {len(df)} assignments → {out_file.name}")
+            
+            # Upload to S3 if enabled
+            upload_to_s3_if_enabled(out_file, 'umpires')
         
         return True
         
@@ -1259,12 +1310,12 @@ def fetch_umpires_data(date_str: str, out_dir: Path) -> bool:
         return False
 
 # =============================================================================
-# ENHANCED BACKFILL ORCHESTRATION
+# ENHANCED BACKFILL ORCHESTRATION WITH S3 INTEGRATION
 # =============================================================================
 
 def enhanced_backfill_date(date_str: str, out_dir: Path, weather_api_key: Optional[str] = None) -> Dict[str, any]:
-    """Enhanced backfill with comprehensive error handling and robust rate limiting"""
-    print(f"\n📅 Processing {date_str} with enhanced error handling")
+    """Enhanced backfill with comprehensive error handling, robust rate limiting, and S3 integration"""
+    print(f"\n📅 Processing {date_str} with enhanced error handling and S3 integration")
     
     error_handler = EnhancedErrorHandler()
     
@@ -1334,10 +1385,10 @@ def enhanced_backfill_date(date_str: str, out_dir: Path, weather_api_key: Option
     return results
 
 def main():
-    parser = argparse.ArgumentParser(description="Enhanced MLB data backfill with robust error handling")
+    parser = argparse.ArgumentParser(description="Enhanced MLB data backfill with robust error handling and S3 integration")
     parser.add_argument("--start", required=True, help="Start date (YYYY-MM-DD)")
     parser.add_argument("--end", required=True, help="End date (YYYY-MM-DD)")
-    parser.add_argument("--output", default="data", help="Output directory")
+    parser.add_argument("--output", default="stage", help="Output directory")
     parser.add_argument("--show-api-status", action="store_true", help="Show API rate limit status")
     args = parser.parse_args()
     
@@ -1352,16 +1403,27 @@ def main():
     out_dir = Path(args.output)
     out_dir.mkdir(exist_ok=True)
     
-    # Get weather API key from environment
-    weather_api_key = os.getenv("OPENWEATHER_API_KEY")
-    if not weather_api_key:
-        print("⚠️ No OPENWEATHER_API_KEY found - weather data will be skipped")
+    # Get configuration
+    from py.config import get_config
+    config = get_config()
+    
+    # Get weather API key from config
+    weather_api_key = config.OPENWEATHER_API_KEY if config.ENABLE_WEATHER else None
+    if not weather_api_key and config.ENABLE_WEATHER:
+        print("⚠️ Weather is enabled but no OPENWEATHER_API_KEY found - weather data will be skipped")
         print("   Get a free key at: https://openweathermap.org/api")
     
     print(f"🚀 Enhanced MLB backfill: {start_date.date()} to {end_date.date()}")
     print(f"📁 Output directory: {out_dir}")
     print(f"🎯 Collecting: games, play_by_play, game_info, weather, umpires, lineups, rosters, venue_factors")
     print(f"🛡️ Features: Robust error handling, graceful degradation, advanced rate limiting")
+    
+    if config.ENABLE_S3_STORAGE:
+        print(f"☁️ S3 integration enabled: {config.AWS_S3_BUCKET}")
+        if config.AUTO_UPLOAD_TO_S3:
+            print(f"📤 Auto-upload to S3: enabled")
+        if config.AUTO_CLEANUP_LOCAL:
+            print(f"🧹 Auto-cleanup local files: enabled")
     
     # Show API status if requested
     if args.show_api_status:
@@ -1423,9 +1485,19 @@ def main():
         status = rate_limiter.get_api_status(api_name)
         print(f"   {api_name}: {status['total_calls']} total calls, {status['consecutive_errors']} consecutive errors")
     
+    # S3 summary
+    if config.ENABLE_S3_STORAGE:
+        print(f"\n☁️ S3 Summary:")
+        try:
+            s3_manager = config.get_s3_manager()
+            s3_files = s3_manager.list_parquet_files()
+            print(f"   Total files in S3: {len(s3_files)}")
+        except Exception as e:
+            print(f"   S3 status check failed: {e}")
+    
     print(f"\n💡 Next steps:")
-    print(f"   1. Load data: python run_loader.py --input-dir {args.output}")
-    print(f"   2. Run analysis: python enhanced_simple_analysis.py")
+    print(f"   1. Load data: python loader/enhanced_load_parquet_into_pg.py --input-dir {args.output}")
+    print(f"   2. Run analysis: python py/enhanced_simple_analysis.py")
 
 if __name__ == "__main__":
     main()

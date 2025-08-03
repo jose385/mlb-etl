@@ -1,7 +1,7 @@
 """
 Centralized configuration management for MLB ETL pipeline
 Handles all environment variables with validation and defaults
-Enhanced for 9-table betting analysis system
+Enhanced for 9-table betting analysis system with AWS S3 and RDS support
 """
 import os
 import sys
@@ -28,6 +28,14 @@ class Config:
         # API Keys (CONDITIONAL)
         self.OPENWEATHER_API_KEY = os.getenv("OPENWEATHER_API_KEY", "")
         self.MLB_API_KEY = os.getenv("MLB_API_KEY", "")  # Future use
+        
+        # AWS Configuration
+        self.AWS_S3_BUCKET = os.getenv("AWS_S3_BUCKET", "")
+        self.AWS_S3_PREFIX = os.getenv("AWS_S3_PREFIX", "mlb-data")
+        self.AWS_DEFAULT_REGION = os.getenv("AWS_DEFAULT_REGION", "us-east-1")
+        self.ENABLE_S3_STORAGE = self._str_to_bool(os.getenv("ENABLE_S3_STORAGE", "false"))
+        self.AUTO_UPLOAD_TO_S3 = self._str_to_bool(os.getenv("AUTO_UPLOAD_TO_S3", "false"))
+        self.AUTO_CLEANUP_LOCAL = self._str_to_bool(os.getenv("AUTO_CLEANUP_LOCAL", "false"))
         
         # Directory Paths
         self.OUTPUT_DIR = os.getenv("OUTPUT_DIR", "stage")
@@ -104,6 +112,10 @@ class Config:
         if self.ENABLE_WEATHER and not self.OPENWEATHER_API_KEY:
             issues.append("Weather is enabled but OPENWEATHER_API_KEY is not set")
         
+        # S3 validation
+        if self.ENABLE_S3_STORAGE and not self.AWS_S3_BUCKET:
+            issues.append("S3 storage is enabled but AWS_S3_BUCKET is not set")
+        
         # Directory validation
         directories_to_check = [
             (self.OUTPUT_DIR, "OUTPUT_DIR"),
@@ -164,10 +176,27 @@ class Config:
         """Get database manager instance"""
         if not self.PG_DSN:
             raise ConfigError("PG_DSN not configured")
-    
+        
         from .database import DatabaseManager
         return DatabaseManager(self.PG_DSN)
-
+    
+    def get_s3_manager(self):
+        """Get S3 data manager instance"""
+        if not self.ENABLE_S3_STORAGE:
+            raise ConfigError("S3 storage not enabled")
+        
+        if not self.AWS_S3_BUCKET:
+            raise ConfigError("AWS_S3_BUCKET not configured")
+        
+        from .s3_storage import S3DataManager
+        return S3DataManager(self.AWS_S3_BUCKET, self.AWS_S3_PREFIX)
+    
+    def get_schema_manager(self):
+        """Get schema migration manager"""
+        from .schema_manager import SchemaMigrationManager
+        db_manager = self.get_database_manager()
+        return SchemaMigrationManager(db_manager, self.MIGRATIONS_DIR)
+    
     def test_database_connection(self) -> tuple[bool, str]:
         """Test database connection with retry logic"""
         try:
@@ -206,12 +235,61 @@ class Config:
         except Exception as e:
             return False, f"Weather API test failed: {e}"
     
+    def test_s3_access(self) -> tuple[bool, str]:
+        """Test S3 access"""
+        if not self.ENABLE_S3_STORAGE:
+            return False, "S3 storage not enabled"
+        
+        if not self.AWS_S3_BUCKET:
+            return False, "AWS_S3_BUCKET not set"
+        
+        try:
+            s3_manager = self.get_s3_manager()
+            files = s3_manager.list_parquet_files()
+            return True, f"S3 access successful ({len(files)} files found)"
+        except Exception as e:
+            return False, f"S3 access failed: {e}"
+    
+    def initialize_database(self, reset: bool = False) -> bool:
+        """Initialize database with proper schema"""
+        try:
+            schema_manager = self.get_schema_manager()
+            
+            if reset:
+                print("🚨 WARNING: This will delete ALL data!")
+                confirm = input("Type 'DELETE ALL DATA' to confirm: ")
+                if confirm == "DELETE ALL DATA":
+                    schema_manager.reset_schema(confirm=True)
+                else:
+                    print("❌ Schema reset cancelled")
+                    return False
+            
+            results = schema_manager.run_migrations()
+            
+            success_count = sum(1 for success in results.values() if success)
+            total_count = len(results)
+            
+            print(f"📊 Migration results: {success_count}/{total_count} successful")
+            
+            if success_count == total_count:
+                print("✅ Database schema initialized successfully")
+                return True
+            else:
+                print("❌ Some migrations failed")
+                return False
+                
+        except Exception as e:
+            print(f"❌ Database initialization failed: {e}")
+            return False
+    
     def get_summary(self) -> Dict:
         """Get enhanced configuration summary for debugging"""
         return {
             "database_configured": bool(self.PG_DSN),
             "weather_configured": bool(self.OPENWEATHER_API_KEY),
             "weather_enabled": self.ENABLE_WEATHER,
+            "s3_configured": bool(self.AWS_S3_BUCKET),
+            "s3_enabled": self.ENABLE_S3_STORAGE,
             "venue_factors_enabled": self.ENABLE_VENUE_FACTORS,
             "recent_stats_enabled": self.ENABLE_RECENT_STATS,
             "game_info_enabled": self.ENABLE_GAME_INFO,
@@ -224,8 +302,9 @@ class Config:
     def print_status(self):
         """Print enhanced configuration status"""
         print("⚙️ Enhanced Configuration Status:")
-        print(f"   Database: {'✅' if self.PG_DSN else '❌'} {'(set)' if self.PG_DSN else '(missing)'}")
+        print(f"   Database: {'✅' if self.PG_DSN else '❌'} {'(RDS)' if 'rds.amazonaws.com' in self.PG_DSN else '(local)' if self.PG_DSN else '(missing)'}")
         print(f"   Weather API: {'✅' if self.OPENWEATHER_API_KEY else '❌'} {'(set)' if self.OPENWEATHER_API_KEY else '(missing)'}")
+        print(f"   S3 Storage: {'✅' if self.AWS_S3_BUCKET else '❌'} {'(enabled)' if self.ENABLE_S3_STORAGE else '(disabled)' if self.AWS_S3_BUCKET else '(missing)'}")
         print(f"   Output Directory: {'✅' if Path(self.OUTPUT_DIR).exists() else '❌'} {self.OUTPUT_DIR}")
         print(f"   Debug Mode: {'🐛' if self.DEBUG else '📊'} {'ON' if self.DEBUG else 'OFF'}")
         
@@ -238,6 +317,13 @@ class Config:
         print(f"   Pitcher Workload: {'✅' if self.ENABLE_PITCHER_WORKLOAD else '❌'}")
         print(f"   Team Form Analysis: {'✅' if self.ENABLE_TEAM_FORM_ANALYSIS else '❌'}")
         print(f"   Ballpark Adjustments: {'✅' if self.ENABLE_BALLPARK_ADJUSTMENTS else '❌'}")
+        
+        if self.ENABLE_S3_STORAGE:
+            print(f"\n☁️ S3 Configuration:")
+            print(f"   Bucket: {self.AWS_S3_BUCKET}")
+            print(f"   Prefix: {self.AWS_S3_PREFIX}")
+            print(f"   Auto Upload: {'✅' if self.AUTO_UPLOAD_TO_S3 else '❌'}")
+            print(f"   Auto Cleanup: {'✅' if self.AUTO_CLEANUP_LOCAL else '❌'}")
     
     def get_enabled_features(self) -> List[str]:
         """Get list of enabled enhanced features"""
@@ -252,6 +338,7 @@ class Config:
             'pitcher_workload': self.ENABLE_PITCHER_WORKLOAD,
             'team_form_analysis': self.ENABLE_TEAM_FORM_ANALYSIS,
             'ballpark_adjustments': self.ENABLE_BALLPARK_ADJUSTMENTS,
+            's3_storage': self.ENABLE_S3_STORAGE,
         }
         
         for feature_name, enabled in feature_mapping.items():
@@ -259,45 +346,6 @@ class Config:
                 features.append(feature_name)
         
         return features
-    
-    def get_schema_manager(self):
-        """Get schema migration manager"""
-        from .schema_manager import SchemaMigrationManager
-        db_manager = self.get_database_manager()
-        return SchemaMigrationManager(db_manager, self.MIGRATIONS_DIR)
-
-    def initialize_database(self, reset: bool = False) -> bool:
-        """Initialize database with proper schema"""
-        try:
-            schema_manager = self.get_schema_manager()
-        
-            if reset:
-                print("🚨 WARNING: This will delete ALL data!")
-                confirm = input("Type 'DELETE ALL DATA' to confirm: ")
-                if confirm == "DELETE ALL DATA":
-                    schema_manager.reset_schema(confirm=True)
-                else:
-                    print("❌ Schema reset cancelled")
-                    return False
-        
-            results = schema_manager.run_migrations()
-        
-            success_count = sum(1 for success in results.values() if success)
-            total_count = len(results)
-        
-            print(f"📊 Migration results: {success_count}/{total_count} successful")
-        
-            if success_count == total_count:
-                print("✅ Database schema initialized successfully")
-                return True
-            else:
-                print("❌ Some migrations failed")
-                return False
-            
-        except Exception as e:
-            print(f"❌ Database initialization failed: {e}")
-            return False
-
 
 # Global configuration instance
 config = Config()
@@ -327,18 +375,22 @@ def require_config(require_weather: bool = False, require_database: bool = True)
         print("\n🔧 To fix these issues:")
         if any("PG_DSN" in issue for issue in issues):
             print("   1. Set database connection:")
-            print("      export PG_DSN='postgresql://user:password@localhost:5432/mlb_db'")
+            print("      export PG_DSN='postgresql://user:password@rds-endpoint.region.rds.amazonaws.com:5432/db'")
         
         if any("OPENWEATHER_API_KEY" in issue for issue in issues):
             print("   2. Set weather API key:")
             print("      export OPENWEATHER_API_KEY='your_openweather_api_key'")
             print("      Get free key at: https://openweathermap.org/api")
         
+        if any("AWS_S3_BUCKET" in issue for issue in issues):
+            print("   3. Set S3 bucket:")
+            print("      export AWS_S3_BUCKET='your-mlb-data-bucket'")
+        
         if any("directory" in issue.lower() for issue in issues):
-            print("   3. Create missing directories:")
+            print("   4. Create missing directories:")
             print(f"      mkdir -p {config.OUTPUT_DIR} {config.MIGRATIONS_DIR}")
         
-        print("\n   4. Copy enhanced environment template:")
+        print("\n   5. Copy enhanced environment template:")
         print("      cp .env.enhanced_example .env")
         print("      # Then edit .env with your actual values")
         

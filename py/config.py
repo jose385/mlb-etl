@@ -37,6 +37,7 @@ class Config:
         self.AUTO_UPLOAD_TO_S3 = self._str_to_bool(os.getenv("AUTO_UPLOAD_TO_S3", "false"))
         self.AUTO_CLEANUP_LOCAL = self._str_to_bool(os.getenv("AUTO_CLEANUP_LOCAL", "false"))
         
+        
         # Directory Paths
         self.OUTPUT_DIR = os.getenv("OUTPUT_DIR", "stage")
         self.MIGRATIONS_DIR = os.getenv("MIGRATIONS_DIR", "migrations")

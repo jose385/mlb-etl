@@ -110,6 +110,54 @@ def get_enhanced_table_mapping(file_stem: str) -> str:
     return base_name
 
 
+def get_loading_order_priority(data_type: str) -> int:
+    """
+    CRITICAL FIX: Define loading order to respect foreign key dependencies
+    Lower numbers = load first
+    """
+    loading_order = {
+        # Load parent tables first (no dependencies)
+        'game_info': 1,      # PRIMARY - All other tables reference this
+        'venue_factors': 2,   # INDEPENDENT - No foreign keys
+        'rosters': 3,        # SEMI-INDEPENDENT - Only references dates/teams
+        
+        # Load child tables second (depend on game_info)
+        'games': 4,          # References game_info.game_pk
+        'play_by_play': 5,   # References game_info.game_pk  
+        'lineups': 6,        # References game_info.game_pk
+        'umpires': 7,        # References game_info.game_pk
+        'weather': 8,        # References game_info.game_pk
+        'recent_stats': 9,   # INDEPENDENT but load last
+    }
+    
+    return loading_order.get(data_type, 999)  # Unknown types load last
+
+
+def sort_files_by_dependency_order(files: List[Path]) -> List[Path]:
+    """
+    CRITICAL FIX: Sort files to load in dependency order
+    This prevents foreign key constraint violations
+    """
+    def get_file_priority(file_path: Path) -> tuple:
+        stem = file_path.stem
+        table_name = get_enhanced_table_mapping(stem)
+        priority = get_loading_order_priority(table_name)
+        
+        # Sort by: (priority, filename) to ensure consistent ordering
+        return (priority, stem)
+    
+    sorted_files = sorted(files, key=get_file_priority)
+    
+    print(f"📋 Loading order determined:")
+    for file in sorted_files:
+        stem = file.stem
+        table_name = get_enhanced_table_mapping(stem)
+        priority = get_loading_order_priority(table_name)
+        print(f"   {priority:2d}. {file.name} → {table_name}")
+    
+    return sorted_files
+
+
 @retry_database_operation(max_retries=3, delay=2)
 def connect():
     """Connect to PostgreSQL with configuration validation"""
@@ -238,6 +286,65 @@ def load_table(conn, table: str, df: pd.DataFrame):
         print(f"❌ Error loading {table}: {e}")
         try:
             cur.execute(f"DROP TABLE IF EXISTS {temp_table}")
+        except:
+            pass
+        raise
+
+
+@retry_database_operation(max_retries=2, delay=1)
+def load_all_files_in_transaction(conn, files_and_tables: List[tuple]):
+    """
+    CRITICAL FIX: Load all files in a single transaction with deferred constraints
+    This allows foreign keys to be checked only at commit time
+    """
+    cur = conn.cursor()
+    
+    try:
+        # Start transaction and defer constraint checking
+        cur.execute("BEGIN")
+        cur.execute("SET CONSTRAINTS ALL DEFERRED")
+        
+        total_rows_loaded = 0
+        successful_loads = 0
+        
+        for file_path, table_name in files_and_tables:
+            print(f"\n⏳ Loading {file_path.name} → {table_name}")
+            
+            try:
+                # Load parquet file
+                df = pd.read_parquet(file_path)
+                print(f"   📊 Read parquet: {len(df)} rows, {len(df.columns)} columns")
+                
+                if df.empty:
+                    print(f"   ⏭️ Skipping empty file: {file_path.name}")
+                    continue
+                
+                # Load into database
+                load_table(conn, table_name, df)
+                
+                successful_loads += 1
+                total_rows_loaded += len(df)
+                
+            except Exception as e:
+                print(f"   ❌ Failed to load {file_path.name}: {e}")
+                # Don't raise - continue with other files in this transaction
+                continue
+        
+        # Commit transaction - this is when foreign key constraints are checked
+        print(f"\n🔄 Committing transaction with {successful_loads} successful loads...")
+        cur.execute("COMMIT")
+        
+        print(f"✅ Transaction committed successfully!")
+        print(f"   📊 Total rows loaded: {total_rows_loaded:,}")
+        print(f"   📁 Files processed: {successful_loads}")
+        
+        return successful_loads, total_rows_loaded
+        
+    except Exception as e:
+        print(f"❌ Transaction failed: {e}")
+        try:
+            cur.execute("ROLLBACK")
+            print("🔄 Transaction rolled back")
         except:
             pass
         raise
@@ -428,39 +535,62 @@ def main():
         
         print(f"📋 Filtered to {len(files)} files for enhanced schema")
     
-    # Process files
-    successful_loads = 0
-    failed_loads = 0
-    total_rows_loaded = 0
+    # CRITICAL FIX: Sort files by dependency order
+    files = sort_files_by_dependency_order(files)
     
+    # Prepare file-to-table mapping
+    files_and_tables = []
     for pq_file in files:
         stem = pq_file.stem
         table = get_enhanced_table_mapping(stem)
+        files_and_tables.append((pq_file, table))
+    
+    # CRITICAL FIX: Load all files in a single transaction with deferred constraints
+    try:
+        successful_loads, total_rows_loaded = load_all_files_in_transaction(conn, files_and_tables)
+        failed_loads = len(files) - successful_loads
         
-        print(f"\n⏳ {pq_file.name} → public.{table}")
+        # Check for constraint violations after loading
+        print(f"\n🔍 Checking for constraint violations...")
         
-        try:
-            # Load parquet file
-            df = pd.read_parquet(pq_file)
-            print(f"   📊 Loaded parquet: {len(df)} rows, {len(df.columns)} columns")
+        with conn.cursor() as cur:
+            # Check if the constraint validation function exists
+            cur.execute("""
+                SELECT EXISTS (
+                    SELECT 1 FROM pg_proc 
+                    WHERE proname = 'check_foreign_key_violations'
+                )
+            """)
+            function_exists = cur.fetchone()[0]
             
-            # Show debug info if requested
-            if args.debug:
-                existing_cols = set(get_table_columns(conn, table))
-                parquet_cols = set(df.columns)
-                print(f"   🔍 Table expects: {sorted(existing_cols)}")
-                print(f"   🔍 Parquet has: {sorted(parquet_cols)}")
-            
-            # Load data
-            load_table(conn, table, df)
-            
-            successful_loads += 1
-            total_rows_loaded += len(df)
-            
-        except Exception as e:
-            print(f"   ❌ Failed to load {pq_file.name}: {e}")
-            failed_loads += 1
-            continue
+            if function_exists:
+                cur.execute("SELECT * FROM check_foreign_key_violations()")
+                violations = cur.fetchall()
+                
+                total_violations = sum(row[2] for row in violations)
+                if total_violations > 0:
+                    print(f"⚠️ Found {total_violations} foreign key violations:")
+                    for table, constraint, count in violations:
+                        if count > 0:
+                            print(f"   {table}.{constraint}: {count} violations")
+                else:
+                    print(f"✅ No foreign key violations found")
+            else:
+                print(f"⚠️ Constraint validation function not available (run migrations first)")
+        
+    except Exception as e:
+        print(f"❌ Loading failed: {e}")
+        successful_loads = 0
+        failed_loads = len(files)
+        total_rows_loaded = 0
+        
+        # Show debugging info
+        print(f"\n🔍 Debugging info:")
+        print(f"   Files to load: {len(files)}")
+        for pq_file, table in files_and_tables[:5]:  # Show first 5
+            print(f"   {pq_file.name} → {table}")
+        if len(files_and_tables) > 5:
+            print(f"   ... and {len(files_and_tables) - 5} more")
     
     # Upload to S3 if requested
     if args.upload_to_s3 and s3_manager:

@@ -9,8 +9,8 @@ __author__ = "MLB Analytics Team"
 
 # Optional: Import commonly used functions/classes
 try:
-    from .backfill import main as run_backfill
-    from .daily_betting_analysis import get_complete_betting_analysis
+    from .enhanced_simple_backfill import main as run_backfill
+    from .config import get_config
 except ImportError:
     # Handle cases where dependencies aren't available
     pass

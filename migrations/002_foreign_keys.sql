@@ -1,5 +1,6 @@
--- migrations/002_foreign_keys_fixed.sql
+-- migrations/002_foreign_keys.sql
 -- FIXED: Properly deferrable foreign keys that won't block loading
+-- These constraints are checked only at transaction commit time
 
 -- Drop existing foreign keys if they exist
 ALTER TABLE IF EXISTS public.games DROP CONSTRAINT IF EXISTS fk_games_game_info;
@@ -8,7 +9,7 @@ ALTER TABLE IF EXISTS public.weather DROP CONSTRAINT IF EXISTS fk_weather_game_i
 ALTER TABLE IF EXISTS public.umpires DROP CONSTRAINT IF EXISTS fk_umpires_game_info;
 ALTER TABLE IF EXISTS public.lineups DROP CONSTRAINT IF EXISTS fk_lineups_game_info;
 
--- CRITICAL FIX: Set constraint check behavior at session level
+-- CRITICAL FIX: Set default constraint behavior for this session
 SET CONSTRAINTS ALL DEFERRED;
 
 -- Add foreign key constraints that are properly deferrable
@@ -95,4 +96,4 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
-COMMENT ON FUNCTION check_foreign_key_violations() IS 'Check for foreign key violations before they cause loading failures';
+COMMENT ON FUNCTION check_foreign_key_violations() IS 'Check for foreign key violations before they cause loading failures - use this for debugging';

@@ -2,6 +2,7 @@
 Centralized configuration management for MLB ETL pipeline
 Handles all environment variables with validation and defaults
 Enhanced for 9-table betting analysis system with AWS S3 and RDS support
+UPDATED: Flexible configuration with graceful degradation
 """
 import os
 import sys
@@ -351,54 +352,89 @@ class Config:
 # Global configuration instance
 config = Config()
 
-def require_config(require_weather: bool = False, require_database: bool = True) -> Config:
+def require_config(require_weather: bool = False, require_database: bool = True, 
+                  graceful_degradation: bool = True) -> Config:
     """
-    Validate and return configuration, exiting on errors
+    FIXED: More flexible configuration validation with graceful degradation
     
     Args:
         require_weather: Whether to require weather API
         require_database: Whether to require database connection
+        graceful_degradation: If True, warn about missing features instead of exiting
     
     Returns:
-        Validated Config instance
+        Config instance (may have some features disabled)
     
     Raises:
-        SystemExit: If validation fails
+        SystemExit: Only if critical requirements are missing and graceful_degradation=False
     """
     issues = config.validate(require_weather=require_weather, 
                            require_database=require_database)
     
-    if issues:
-        print("❌ Enhanced configuration validation failed:")
-        for issue in issues:
+    if not issues:
+        return config
+    
+    # Separate critical vs non-critical issues
+    critical_issues = []
+    warning_issues = []
+    
+    for issue in issues:
+        if require_database and "PG_DSN" in issue:
+            critical_issues.append(issue)
+        elif require_weather and "OPENWEATHER_API_KEY" in issue:
+            critical_issues.append(issue)
+        else:
+            warning_issues.append(issue)
+    
+    # Show warnings for non-critical issues
+    if warning_issues and graceful_degradation:
+        print("⚠️ Configuration warnings (features will be limited):")
+        for issue in warning_issues:
             print(f"   • {issue}")
         
-        print("\n🔧 To fix these issues:")
-        if any("PG_DSN" in issue for issue in issues):
-            print("   1. Set database connection:")
-            print("      export PG_DSN='postgresql://user:password@rds-endpoint.region.rds.amazonaws.com:5432/db'")
+        # Auto-disable features with missing requirements
+        if any("OPENWEATHER_API_KEY" in issue for issue in warning_issues):
+            config.ENABLE_WEATHER = False
+            print("   → Weather analysis disabled")
         
-        if any("OPENWEATHER_API_KEY" in issue for issue in issues):
-            print("   2. Set weather API key:")
-            print("      export OPENWEATHER_API_KEY='your_openweather_api_key'")
-            print("      Get free key at: https://openweathermap.org/api")
+        if any("S3" in issue for issue in warning_issues):
+            config.ENABLE_S3_STORAGE = False
+            print("   → S3 storage disabled")
+    
+    # Only exit for critical issues
+    if critical_issues:
+        print("❌ Critical configuration errors:")
+        for issue in critical_issues:
+            print(f"   • {issue}")
         
-        if any("AWS_S3_BUCKET" in issue for issue in issues):
-            print("   3. Set S3 bucket:")
-            print("      export AWS_S3_BUCKET='your-mlb-data-bucket'")
+        print("\n🔧 Quick fixes:")
+        if any("PG_DSN" in issue for issue in critical_issues):
+            print("   1. Set database: export PG_DSN='postgresql://user:pass@host:5432/db'")
         
-        if any("directory" in issue.lower() for issue in issues):
-            print("   4. Create missing directories:")
-            print(f"      mkdir -p {config.OUTPUT_DIR} {config.MIGRATIONS_DIR}")
+        if require_weather and any("OPENWEATHER_API_KEY" in issue for issue in critical_issues):
+            print("   2. Set weather API: export OPENWEATHER_API_KEY='your_key'")
         
-        print("\n   5. Copy enhanced environment template:")
-        print("      cp .env.enhanced_example .env")
-        print("      # Then edit .env with your actual values")
+        print("   3. Or run: python setup_env.py")
         
-        sys.exit(1)
+        if not graceful_degradation:
+            sys.exit(1)
+        else:
+            print("\n⚠️ Continuing with limited functionality...")
     
     return config
 
+
+# Helper functions for different use cases
+def get_config_for_analysis() -> Config:
+    """Get config optimized for analysis (database required, weather optional)"""
+    return require_config(require_database=True, require_weather=False, graceful_degradation=True)
+
+
+def get_config_for_setup() -> Config:
+    """Get config for setup/initialization (more lenient)"""
+    return require_config(require_database=False, require_weather=False, graceful_degradation=True)
+
+
 def get_config() -> Config:
-    """Get configuration instance without validation"""
+    """Get configuration instance without strict validation"""
     return config

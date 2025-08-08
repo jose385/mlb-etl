@@ -472,9 +472,9 @@ def collect_play_by_play_data(date_str: str, out_dir: Path, use_placeholder: boo
                         'away_score': away_score,
                         'is_scoring_play': is_scoring,
                         'rbi': rbi,
-                        'runner_on_1b': runner_1b,
-                        'runner_on_2b': runner_2b,
-                        'runner_on_3b': runner_3b,
+                        'runner_on_1b': int(runner_1b) if runner_1b is not None else None,
+                        'runner_on_2b': int(runner_2b) if runner_2b is not None else None,
+                        'runner_on_3b': int(runner_3b) if runner_3b is not None else None,
                     }
                     
                     all_plays.append(play_data)

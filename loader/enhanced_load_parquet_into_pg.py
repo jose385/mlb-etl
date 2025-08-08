@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-enhanced_load_parquet_into_pg.py – FIXED: Enhanced loader for complete 9-table schema
-MAJOR FIXES: Better file mapping, improved error handling, proper data type handling
-Supports loading from local files and S3
+enhanced_load_parquet_into_pg.py – FIXED: Enhanced loader with placeholder data support
+MAJOR FIXES: Better error handling, placeholder data validation, improved constraint handling
+Supports loading from local files and S3, works reliably with both placeholder and real data
 
 Usage:
     python enhanced_load_parquet_into_pg.py [--input-dir DIR] [--tables T1 T2 ...] [--from-s3]
@@ -14,10 +14,9 @@ import time
 from pathlib import Path
 from functools import wraps
 from typing import List
-from py.config import require_config
-
 import pandas as pd
 import psycopg2
+import numpy as np
 
 
 def retry_database_operation(max_retries=3, delay=1):
@@ -191,10 +190,17 @@ def sort_files_by_dependency_order(files: List[Path]) -> List[Path]:
 @retry_database_operation(max_retries=3, delay=2)
 def connect():
     """Connect to PostgreSQL with configuration validation"""
-    config = require_config(require_database=True, graceful_degradation=True)
-    
     try:
+        from py.config import require_config
+        config = require_config(require_database=True, graceful_degradation=True)
+        
+        if not config.PG_DSN:
+            raise ConnectionError("PG_DSN not configured")
+        
         db_manager = config.get_database_manager()
+        if db_manager is None:
+            raise ConnectionError("Database manager not available")
+        
         return db_manager.get_connection()
     except Exception as e:
         print(f"❌ Database connection failed: {e}")
@@ -216,9 +222,72 @@ def get_table_columns(conn, table: str):
     return [row[0] for row in cur.fetchall()]
 
 
+def validate_placeholder_data(df: pd.DataFrame, table: str) -> pd.DataFrame:
+    """
+    NEW: Validate and clean placeholder data for reliable loading
+    """
+    if df.empty:
+        return df
+    
+    # Clean up any problematic values
+    df = df.copy()
+    
+    # Replace any infinite values with None
+    df = df.replace([np.inf, -np.inf], None)
+    
+    # Handle NaN values appropriately
+    for col in df.columns:
+        if df[col].dtype == 'object':
+            # Replace NaN in string columns with None
+            df[col] = df[col].where(pd.notna(df[col]), None)
+        elif df[col].dtype in ['float64', 'float32']:
+            # Keep NaN as None for numeric columns
+            df[col] = df[col].where(pd.notna(df[col]), None)
+    
+    # Table-specific validations
+    if table == 'games':
+        # Ensure pitch numbers are positive
+        if 'pitch_number' in df.columns:
+            df['pitch_number'] = df['pitch_number'].clip(lower=1)
+        
+        # Ensure at_bat_number is positive
+        if 'at_bat_number' in df.columns:
+            df['at_bat_number'] = df['at_bat_number'].clip(lower=1)
+    
+    elif table == 'game_info':
+        # Ensure scores are non-negative
+        for score_col in ['home_score', 'away_score']:
+            if score_col in df.columns:
+                df[score_col] = df[score_col].clip(lower=0)
+    
+    elif table == 'weather':
+        # Ensure reasonable weather values
+        if 'temperature_f' in df.columns:
+            df['temperature_f'] = df['temperature_f'].clip(lower=-20, upper=120)
+        
+        if 'wind_speed_mph' in df.columns:
+            df['wind_speed_mph'] = df['wind_speed_mph'].clip(lower=0, upper=100)
+        
+        if 'humidity_pct' in df.columns:
+            df['humidity_pct'] = df['humidity_pct'].clip(lower=0, upper=100)
+    
+    elif table == 'recent_stats':
+        # Ensure reasonable stat values
+        if 'batting_avg' in df.columns:
+            df['batting_avg'] = df['batting_avg'].clip(lower=0.000, upper=1.000)
+        
+        if 'era' in df.columns:
+            df['era'] = df['era'].clip(lower=0.00, upper=20.00)
+        
+        if 'ops' in df.columns:
+            df['ops'] = df['ops'].clip(lower=0.000, upper=3.000)
+    
+    return df
+
+
 @retry_database_operation(max_retries=2, delay=1)
 def load_table(conn, table: str, df: pd.DataFrame):
-    """FIXED: Load data into table with enhanced error handling and type conversion"""
+    """FIXED: Load data into table with enhanced error handling and placeholder data support"""
     if df.empty:
         print(f"⏭️ Skipping {table} - DataFrame is empty")
         return
@@ -254,6 +323,9 @@ def load_table(conn, table: str, df: pd.DataFrame):
     # Prepare data for loading
     df_to_load = df[to_load].copy()
     
+    # NEW: Validate placeholder data
+    df_to_load = validate_placeholder_data(df_to_load, table)
+    
     # FIXED: Enhanced data type conversions for PostgreSQL compatibility
     for col in df_to_load.columns:
         # Handle missing values
@@ -276,7 +348,8 @@ def load_table(conn, table: str, df: pd.DataFrame):
         # FIXED: Handle date columns properly
         if col.endswith('_date') or 'date' in col.lower():
             try:
-                df_to_load[col] = pd.to_datetime(df_to_load[col]).dt.date
+                if df_to_load[col].dtype == 'object':
+                    df_to_load[col] = pd.to_datetime(df_to_load[col], errors='coerce').dt.date
             except:
                 pass  # Keep original if conversion fails
         
@@ -284,6 +357,18 @@ def load_table(conn, table: str, df: pd.DataFrame):
         if col in ['game_pk', 'person_id', 'pitcher', 'batter', 'team_id']:
             try:
                 df_to_load[col] = pd.to_numeric(df_to_load[col], errors='coerce')
+            except:
+                pass
+        
+        # NEW: Handle specific column types for placeholder data
+        if col in ['temperature_f', 'wind_speed_mph', 'era', 'batting_avg', 'ops']:
+            try:
+                df_to_load[col] = pd.to_numeric(df_to_load[col], errors='coerce')
+                # Round to reasonable precision
+                if col in ['era', 'batting_avg', 'ops']:
+                    df_to_load[col] = df_to_load[col].round(3)
+                else:
+                    df_to_load[col] = df_to_load[col].round(1)
             except:
                 pass
     
@@ -346,39 +431,79 @@ def load_table(conn, table: str, df: pd.DataFrame):
                 """
         elif table == "games":
             # Composite primary key: game_pk, at_bat_number, pitch_number
-            insert_sql = f"""
-                INSERT INTO public.{table} ({cols_csv})
-                SELECT {cols_csv} FROM {temp_table}
-                ON CONFLICT (game_pk, at_bat_number, pitch_number) DO NOTHING
-            """
+            pk_cols = ["game_pk", "at_bat_number", "pitch_number"]
+            if all(col in to_load for col in pk_cols):
+                insert_sql = f"""
+                    INSERT INTO public.{table} ({cols_csv})
+                    SELECT {cols_csv} FROM {temp_table}
+                    ON CONFLICT (game_pk, at_bat_number, pitch_number) DO NOTHING
+                """
+            else:
+                # Fallback for incomplete primary key
+                insert_sql = f"""
+                    INSERT INTO public.{table} ({cols_csv})
+                    SELECT {cols_csv} FROM {temp_table}
+                """
         elif table == "play_by_play":
             # Composite primary key: game_pk, at_bat_index, event_index
-            insert_sql = f"""
-                INSERT INTO public.{table} ({cols_csv})
-                SELECT {cols_csv} FROM {temp_table}
-                ON CONFLICT (game_pk, at_bat_index, event_index) DO NOTHING
-            """
+            pk_cols = ["game_pk", "at_bat_index", "event_index"]
+            if all(col in to_load for col in pk_cols):
+                insert_sql = f"""
+                    INSERT INTO public.{table} ({cols_csv})
+                    SELECT {cols_csv} FROM {temp_table}
+                    ON CONFLICT (game_pk, at_bat_index, event_index) DO NOTHING
+                """
+            else:
+                # Fallback for incomplete primary key
+                insert_sql = f"""
+                    INSERT INTO public.{table} ({cols_csv})
+                    SELECT {cols_csv} FROM {temp_table}
+                """
         elif table == "lineups":
             # Composite primary key: game_pk, team_id, batting_order
-            insert_sql = f"""
-                INSERT INTO public.{table} ({cols_csv})
-                SELECT {cols_csv} FROM {temp_table}
-                ON CONFLICT (game_pk, team_id, batting_order) DO NOTHING
-            """
+            pk_cols = ["game_pk", "team_id", "batting_order"]
+            if all(col in to_load for col in pk_cols):
+                insert_sql = f"""
+                    INSERT INTO public.{table} ({cols_csv})
+                    SELECT {cols_csv} FROM {temp_table}
+                    ON CONFLICT (game_pk, team_id, batting_order) DO NOTHING
+                """
+            else:
+                # Fallback for incomplete primary key
+                insert_sql = f"""
+                    INSERT INTO public.{table} ({cols_csv})
+                    SELECT {cols_csv} FROM {temp_table}
+                """
         elif table == "rosters":
             # Composite primary key: game_date, team_id, person_id
-            insert_sql = f"""
-                INSERT INTO public.{table} ({cols_csv})
-                SELECT {cols_csv} FROM {temp_table}
-                ON CONFLICT (game_date, team_id, person_id) DO NOTHING
-            """
+            pk_cols = ["game_date", "team_id", "person_id"]
+            if all(col in to_load for col in pk_cols):
+                insert_sql = f"""
+                    INSERT INTO public.{table} ({cols_csv})
+                    SELECT {cols_csv} FROM {temp_table}
+                    ON CONFLICT (game_date, team_id, person_id) DO NOTHING
+                """
+            else:
+                # Fallback for incomplete primary key
+                insert_sql = f"""
+                    INSERT INTO public.{table} ({cols_csv})
+                    SELECT {cols_csv} FROM {temp_table}
+                """
         elif table == "umpires":
             # Composite primary key: game_pk, umpire_id
-            insert_sql = f"""
-                INSERT INTO public.{table} ({cols_csv})
-                SELECT {cols_csv} FROM {temp_table}
-                ON CONFLICT (game_pk, umpire_id) DO NOTHING
-            """
+            pk_cols = ["game_pk", "umpire_id"]
+            if all(col in to_load for col in pk_cols):
+                insert_sql = f"""
+                    INSERT INTO public.{table} ({cols_csv})
+                    SELECT {cols_csv} FROM {temp_table}
+                    ON CONFLICT (game_pk, umpire_id) DO NOTHING
+                """
+            else:
+                # Fallback for incomplete primary key
+                insert_sql = f"""
+                    INSERT INTO public.{table} ({cols_csv})
+                    SELECT {cols_csv} FROM {temp_table}
+                """
         else:
             # Standard tables - just ignore conflicts
             insert_sql = f"""
@@ -568,6 +693,8 @@ def show_loading_summary(files, successful_loads, failed_loads, total_rows_loade
         print(f"   • Missing columns: File structure doesn't match database schema")
         print(f"   • Data type errors: Invalid data formats")
         print(f"   • Foreign key violations: Parent records missing")
+    else:
+        print(f"\n🎯 All files loaded successfully!")
     
     print(f"\n💡 Next steps:")
     print(f"   1. Validate data: SELECT table_name, count(*) FROM information_schema.tables WHERE table_schema='public' GROUP BY table_name;")
@@ -579,7 +706,7 @@ def show_loading_summary(files, successful_loads, failed_loads, total_rows_loade
 
 
 def main():
-    p = argparse.ArgumentParser(description="FIXED: Enhanced MLB data loader for complete 9-table schema")
+    p = argparse.ArgumentParser(description="FIXED MLB data loader for complete 9-table schema with placeholder data support")
     p.add_argument(
         "--input-dir",
         default="stage",
@@ -621,6 +748,11 @@ def main():
     try:
         from py.config import get_config
         config = get_config()
+        
+        # Show mode info
+        mode = "PLACEHOLDER" if getattr(config, 'USE_PLACEHOLDER_DATA', True) else "REAL"
+        print(f"🔧 Loading {mode} data into database")
+        
     except Exception as e:
         print(f"❌ Configuration error: {e}")
         print("💡 Run: python setup_env.py")
@@ -646,7 +778,8 @@ def main():
     try:
         if config.ENABLE_S3_STORAGE and (args.from_s3 or args.upload_to_s3):
             s3_manager = config.get_s3_manager()
-            print("✅ S3 integration enabled")
+            if s3_manager:
+                print("✅ S3 integration enabled")
     except Exception as e:
         print(f"⚠️ S3 integration not available: {e}")
     

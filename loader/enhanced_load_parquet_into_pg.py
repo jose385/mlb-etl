@@ -361,9 +361,10 @@ def load_table(conn, table: str, df: pd.DataFrame):
             if bool_mask.any():
                 df_to_load[col] = df_to_load[col].map(bool_map).fillna(df_to_load[col])
         
-        # Handle nullable integer columns
+         # Handle nullable integer columns
         if str(df_to_load[col].dtype).startswith('Int'):
-            #df_to_load[col] = df_to_load[col].astype('float64') # FIXED: Removed problematic conversion  # Use float to preserve NaN
+            # FIXED: Keep nullable integers as-is for proper CSV conversion
+            pass
         
         # FIXED: Handle date columns properly
         if col.endswith('_date') or 'date' in col.lower():

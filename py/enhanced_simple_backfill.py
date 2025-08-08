@@ -555,7 +555,7 @@ def collect_lineups_data(date_str: str, out_dir: Path, use_placeholder: bool = T
                             'person_id': player_id,
                             'side': side,
                             'position_code': position_code,
-                            'position_name': position_code,  # Simplified
+                            'position_name': position_code,
                             'person_full_name': f"Player {player_id}",
                             'person_bat_side_code': generator.rng.choice(['L', 'R', 'S']),
                             'person_pitch_hand_code': generator.rng.choice(['L', 'R']),
@@ -563,8 +563,8 @@ def collect_lineups_data(date_str: str, out_dir: Path, use_placeholder: bool = T
                             'season_obp': round(obp, 3),
                             'season_slg': round(slg, 3),
                             'season_ops': round(ops, 3),
-                            'season_home_runs': generator.rng.randint(0, 35),
-                            'season_rbi': generator.rng.randint(10, 100),
+                            'season_home_runs': int(generator.rng.randint(0, 35)),    # FORCE INT
+                            'season_rbi': int(generator.rng.randint(10, 100)),        # FORCE INT
                         }
                         all_lineups.append(lineup_info)
                     
@@ -587,13 +587,19 @@ def collect_lineups_data(date_str: str, out_dir: Path, use_placeholder: bool = T
                         'person_pitch_hand_code': generator.rng.choice(['L', 'R']),
                         'season_era': round(era, 2),
                         'season_whip': round(whip, 2),
-                        'season_strikeouts': generator.rng.randint(50, 250),
+                        'season_strikeouts': int(generator.rng.randint(50, 250)),  # FORCE INT
                         'season_innings_pitched': f"{generator.rng.randint(50, 200)}.{generator.rng.randint(0, 2)}",
                     }
                     all_lineups.append(pitcher_info)
             
             if all_lineups:
                 df_lineups = pd.DataFrame(all_lineups)
+
+                # FORCE INTEGER COLUMNS TO BE PROPER INTEGERS
+                integer_columns = ['season_home_runs', 'season_rbi', 'season_strikeouts']
+                for col in integer_columns:
+                    if col in df_lineups.columns:
+                        df_lineups[col] = df_lineups[col].astype('Int64')
                 df_lineups.to_parquet(out_file, index=False)
                 print(f"✅ Placeholder lineups: {len(df_lineups)} players → {out_file.name}")
             else:
@@ -642,8 +648,9 @@ def calculate_recent_stats(date_str: str, out_dir: Path, use_placeholder: bool =
                 team_id = hash(team) % 1000
                 
                 # Generate stats for batters
+                team_offset = hash(team) % 100000  # Unique offset per team
                 for player_num in range(1, 26):  # 25 players per team
-                    player_id = generator.generate_pitcher_id(team, False) + player_num
+                    player_id = team_offset + player_num  # Unique per team
                     
                     # Batting stats (last 15 days)
                     games_played = generator.rng.randint(8, 15)
@@ -667,11 +674,11 @@ def calculate_recent_stats(date_str: str, out_dir: Path, use_placeholder: bool =
                         'on_base_pct': round(obp, 3),
                         'slugging_pct': round(slg, 3),
                         'ops': round(ops, 3),
-                        'home_runs': generator.rng.randint(0, 5),
-                        'rbis': generator.rng.randint(0, 15),
-                        'stolen_bases': generator.rng.randint(0, 3),
-                        'strikeouts': generator.rng.randint(5, 20),
-                        'walks': generator.rng.randint(2, 12),
+                        'home_runs': int(generator.rng.randint(0, 5)),
+                        'rbis': int(generator.rng.randint(0, 15)),
+                        'stolen_bases': int(generator.rng.randint(0, 3)),
+                        'strikeouts': int(generator.rng.randint(5, 20)),
+                        'walks': int(generator.rng.randint(2, 12)),
                         'hot_streak': is_hot,
                         'cold_streak': is_cold,
                         'clutch_performance': generator.rng.uniform(0.200, 0.400),
@@ -684,7 +691,7 @@ def calculate_recent_stats(date_str: str, out_dir: Path, use_placeholder: bool =
                 
                 # Generate stats for pitchers
                 for pitcher_num in range(1, 13):  # 12 pitchers per team
-                    pitcher_id = generator.generate_pitcher_id(team, True) + pitcher_num
+                    pitcher_id = team_offset + 1000 + pitcher_num  # Unique per team + offset
                     
                     # Pitching stats (last 15 days)
                     games_played = generator.rng.randint(3, 8)
@@ -721,6 +728,16 @@ def calculate_recent_stats(date_str: str, out_dir: Path, use_placeholder: bool =
             
             if recent_stats:
                 df_stats = pd.DataFrame(recent_stats)
+
+                # FORCE ALL INTEGER COLUMNS TO BE PROPER INTEGERS
+                integer_columns = [
+                'games_played', 'home_runs', 'rbis', 'stolen_bases', 'strikeouts', 'walks',
+                'hits_allowed', 'runs_allowed', 'quality_starts', 'saves', 'blown_saves',
+                'consecutive_appearances', 'consecutive_games'  # ADD ALL MISSING ONES
+                ]
+                for col in integer_columns:
+                    if col in df_stats.columns:
+                        df_stats[col] = df_stats[col].astype('Int64')
                 df_stats.to_parquet(out_file, index=False)
                 print(f"✅ Placeholder recent stats: {len(df_stats)} player stats → {out_file.name}")
             else:

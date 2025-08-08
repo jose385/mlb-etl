@@ -380,8 +380,100 @@ def analyze_pitcher_trends(conn, game_pk: int) -> Dict:
     except Exception as e:
         return {"impact": "ERROR", "reason": f"Pitcher analysis error: {e}"}
 
+def analyze_team_performance(conn, team_name, game_pk):
+    """
+    ROBUST team analysis that handles missing data gracefully
+    Works with both placeholder and real data
+    """
+    
+    # Query for team batting stats with error handling
+    team_stats_query = """
+        WITH team_players AS (
+            SELECT DISTINCT person_id
+            FROM rosters r
+            JOIN game_info gi ON r.game_date = gi.game_date
+            WHERE (gi.home_team = %s OR gi.away_team = %s)
+            AND r.game_date >= %s
+            LIMIT 25
+        ),
+        team_batting AS (
+            SELECT rs.*
+            FROM recent_stats rs
+            JOIN team_players tp ON rs.player_id = tp.person_id
+            WHERE rs.stat_type LIKE 'batting%'
+            AND rs.stat_date >= %s
+        )
+        SELECT 
+            COUNT(*) as players_with_stats,
+            AVG(COALESCE(ops, 0.700)) as avg_ops,
+            AVG(COALESCE(batting_avg, 0.250)) as avg_batting_avg,
+            COUNT(CASE WHEN hot_streak THEN 1 END) as hot_players,
+            COUNT(CASE WHEN cold_streak THEN 1 END) as cold_players,
+            AVG(COALESCE(games_played, 0)) as avg_games
+        FROM team_batting
+    """
+    
+    try:
+        # Calculate date range for stats
+        game_date = pd.read_sql("SELECT game_date FROM game_info WHERE game_pk = %s", 
+                               conn, params=[game_pk])['game_date'].iloc[0]
+        lookback_date = game_date - pd.Timedelta(days=15)
+        
+        # Execute query with proper error handling
+        team_result = pd.read_sql(team_stats_query, conn, 
+                                 params=[team_name, team_name, lookback_date, lookback_date])
+        
+        # Check if we got valid results
+        if len(team_result) == 0 or team_result.empty:
+            print(f"⚠️ No recent stats found for {team_name}")
+            return {
+                'avg_ops': 0.700,
+                'avg_batting_avg': 0.250, 
+                'hot_players': 0,
+                'cold_players': 0,
+                'players_analyzed': 0,
+                'data_quality': 'NO_DATA'
+            }
+        
+        # Extract results safely
+        row = team_result.iloc[0]
+        players_with_stats = row['players_with_stats'] if pd.notna(row['players_with_stats']) else 0
+        
+        # Handle case where no players have stats
+        if players_with_stats == 0:
+            print(f"⚠️ {team_name}: Found players but no matching stats")
+            return {
+                'avg_ops': 0.700,
+                'avg_batting_avg': 0.250,
+                'hot_players': 0, 
+                'cold_players': 0,
+                'players_analyzed': 0,
+                'data_quality': 'NO_MATCHING_STATS'
+            }
+        
+        # Return successful analysis
+        return {
+            'avg_ops': float(row['avg_ops']) if pd.notna(row['avg_ops']) else 0.700,
+            'avg_batting_avg': float(row['avg_batting_avg']) if pd.notna(row['avg_batting_avg']) else 0.250,
+            'hot_players': int(row['hot_players']) if pd.notna(row['hot_players']) else 0,
+            'cold_players': int(row['cold_players']) if pd.notna(row['cold_players']) else 0,
+            'players_analyzed': int(players_with_stats),
+            'data_quality': 'GOOD' if players_with_stats >= 15 else 'LIMITED'
+        }
+        
+    except Exception as e:
+        print(f"⚠️ Error analyzing {team_name}: {str(e)}")
+        return {
+            'avg_ops': 0.700,
+            'avg_batting_avg': 0.250,
+            'hot_players': 0,
+            'cold_players': 0, 
+            'players_analyzed': 0,
+            'data_quality': 'ERROR'
+        }
+
 def analyze_team_trends(conn, game_pk: int) -> Dict:
-    """FIXED: Team form analysis with placeholder data support and better error handling"""
+    """FIXED: Team form analysis with robust error handling and graceful degradation"""
     
     # Get teams for this game
     teams_query = """
@@ -404,65 +496,26 @@ def analyze_team_trends(conn, game_pk: int) -> Dict:
         
         team_insights = []
         
-        # Analyze each team using recent_stats
+        # Analyze each team using the robust function
         for team_name, side in [(home_team, 'home'), (away_team, 'away')]:
-            # Try to get team performance from recent_stats
-            # We'll look for batting stats from players on this team
-            team_stats_query = """
-            WITH team_players AS (
-                SELECT DISTINCT person_id
-                FROM rosters r
-                JOIN game_info gi ON r.game_date = gi.game_date
-                WHERE (gi.home_team = %s OR gi.away_team = %s)
-                AND r.game_date >= %s
-                LIMIT 25
-            ),
-            team_batting AS (
-                SELECT rs.*
-                FROM recent_stats rs
-                JOIN team_players tp ON rs.player_id = tp.person_id
-                WHERE rs.stat_type LIKE 'batting%'
-                AND rs.stat_date >= %s
-            )
-            SELECT 
-                COUNT(*) as players_with_stats,
-                AVG(ops) as avg_ops,
-                AVG(batting_avg) as avg_batting_avg,
-                COUNT(CASE WHEN hot_streak THEN 1 END) as hot_players,
-                COUNT(CASE WHEN cold_streak THEN 1 END) as cold_players,
-                AVG(games_played) as avg_games
-            FROM team_batting
-            """
+            team_stats = analyze_team_performance(conn, team_name, game_pk)
             
-            lookback_date = (datetime.now() - timedelta(days=15)).strftime('%Y-%m-%d')
+            # Convert team stats to team insights format
+            avg_ops = team_stats['avg_ops']
+            hot_players = team_stats['hot_players']
+            cold_players = team_stats['cold_players']
+            players_analyzed = team_stats['players_analyzed']
+            data_quality = team_stats['data_quality']
             
-            try:
-                team_result = pd.read_sql(team_stats_query, conn, params=[
-                    team_name, team_name, lookback_date, lookback_date
-                ])
-                
-                if team_result.empty or team_result.iloc[0]['players_with_stats'] == 0:
-                    # Fallback: use basic placeholder values
-                    team_insights.append({
-                        "team": side,
-                        "team_name": team_name,
-                        "trend": "AVERAGE OFFENSE",
-                        "impact": "NEUTRAL",
-                        "est_runs_per_game": 4.5,
-                        "games": 10,
-                        "data_source": "placeholder_fallback"
-                    })
-                    continue
-                
-                row = team_result.iloc[0]
-                players_count = row['players_with_stats']
-                avg_ops = row['avg_ops'] if pd.notna(row['avg_ops']) else 0.750
-                hot_players = row['hot_players'] if pd.notna(row['hot_players']) else 0
-                cold_players = row['cold_players'] if pd.notna(row['cold_players']) else 0
-                
-                # Calculate team form
-                hot_pct = hot_players / max(1, players_count)
-                cold_pct = cold_players / max(1, players_count)
+            # Calculate team form based on stats
+            if data_quality in ['NO_DATA', 'ERROR']:
+                trend = "UNKNOWN"
+                impact = "NEUTRAL"
+                est_runs_per_game = 4.5
+            else:
+                # Calculate hot/cold percentages
+                hot_pct = hot_players / max(1, players_analyzed) if players_analyzed > 0 else 0
+                cold_pct = cold_players / max(1, players_analyzed) if players_analyzed > 0 else 0
                 
                 # Estimate runs per game (rough conversion)
                 est_runs_per_game = 2.0 + (avg_ops - 0.650) * 8.0  # Simplified formula
@@ -483,44 +536,31 @@ def analyze_team_trends(conn, game_pk: int) -> Dict:
                 else:
                     trend = "AVERAGE OFFENSE"
                     impact = "NEUTRAL"
-                
-                team_insights.append({
-                    "team": side,
-                    "team_name": team_name,
-                    "trend": trend,
-                    "impact": impact,
-                    "est_runs_per_game": round(est_runs_per_game, 1),
-                    "avg_ops": round(avg_ops, 3),
-                    "hot_players": int(hot_players),
-                    "cold_players": int(cold_players),
-                    "players_analyzed": int(players_count),
-                    "hot_player_pct": round(hot_pct, 2),
-                    "cold_player_pct": round(cold_pct, 2),
-                    "data_source": "recent_stats"
-                })
-                
-            except Exception as team_e:
-                print(f"⚠️ Error analyzing {team_name}: {team_e}")
-                # Add placeholder team analysis
-                team_insights.append({
-                    "team": side,
-                    "team_name": team_name,
-                    "trend": "UNKNOWN",
-                    "impact": "NEUTRAL",
-                    "est_runs_per_game": 4.5,
-                    "games": 0,
-                    "data_source": "error_fallback"
-                })
+            
+            team_insights.append({
+                "team": side,
+                "team_name": team_name,
+                "trend": trend,
+                "impact": impact,
+                "est_runs_per_game": round(est_runs_per_game, 1),
+                "avg_ops": round(avg_ops, 3),
+                "hot_players": int(hot_players),
+                "cold_players": int(cold_players),
+                "players_analyzed": int(players_analyzed),
+                "data_quality": data_quality,
+                "data_source": "robust_analysis"
+            })
         
         if not team_insights:
             return {"impact": "NEUTRAL", "reason": "No team performance data available"}
         
         return {
             "teams": team_insights,
-            "reason": f"Team form analysis for {len(team_insights)} team(s)"
+            "reason": f"Robust team analysis for {len(team_insights)} team(s)"
         }
         
     except Exception as e:
+        print(f"⚠️ Team analysis error: {str(e)}")
         return {"impact": "ERROR", "reason": f"Team analysis error: {e}"}
 
 def generate_combined_recommendation(weather: Dict, umpire: Dict, 
@@ -814,7 +854,7 @@ def main():
         # Run today's analysis (or recent date for placeholder data)
         if is_placeholder_data():
             # For placeholder data, use a recent date that would have data
-            analysis_date = "2025-01-15"  # Use a date we generated placeholder data for
+            analysis_date = "2025-01-18"  # Use a date we generated placeholder data for
             print(f"🔧 Using placeholder data for {analysis_date}")
         else:
             analysis_date = None  # Use today's date
@@ -831,7 +871,7 @@ def main():
         print(f"❌ Unexpected error: {e}")
         if is_placeholder_data():
             print("💡 If using placeholder data, make sure you've run the backfill:")
-            print("   python py/enhanced_simple_backfill.py --start 2025-01-15 --end 2025-01-15")
+            print("   python py/enhanced_simple_backfill.py --start 2025-01-18 --end 2025-01-18")
         import traceback
         traceback.print_exc()
     finally:

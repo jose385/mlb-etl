@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-simple_analysis.py - Streamlined MLB betting analysis
+simple_analysis.py - FIXED: Streamlined MLB betting analysis
+MAJOR FIXES: Correct table names, empty DataFrame handling, proper error handling
 Combines weather, umpire, pitcher, and team trends into actionable betting insights
 """
 
@@ -21,7 +22,6 @@ BALLPARK_FACTORS = {
     "Tropicana Field": {"team": "Tampa Bay Rays", "run_factor": 0.94, "dome": True},
     "Petco Park": {"team": "San Diego Padres", "run_factor": 0.95},
     "Oracle Park": {"team": "San Francisco Giants", "run_factor": 0.94},
-    # Add essential parks - defaulting others to neutral
 }
 
 def get_ballpark_factor(team_name: str) -> float:
@@ -32,7 +32,7 @@ def get_ballpark_factor(team_name: str) -> float:
     return 1.0  # Neutral for unknown parks
 
 def analyze_weather_impact(conn, game_pk: int) -> Dict:
-    """Simple weather analysis focused on key betting factors"""
+    """FIXED: Weather analysis with proper error handling"""
     
     query = """
     SELECT temperature_f, wind_speed_mph, wind_direction_deg, 
@@ -44,12 +44,12 @@ def analyze_weather_impact(conn, game_pk: int) -> Dict:
     try:
         result = pd.read_sql(query, conn, params=[game_pk])
         if result.empty:
-            return {"impact": "NEUTRAL", "factor": 1.0, "reason": "No weather data"}
+            return {"impact": "NEUTRAL", "factor": 1.0, "reason": "No weather data available"}
         
         row = result.iloc[0]
-        temp = row['temperature_f'] or 70
-        wind_speed = row['wind_speed_mph'] or 0
-        home_team = row['home_team']
+        temp = row['temperature_f'] if pd.notna(row['temperature_f']) else 72
+        wind_speed = row['wind_speed_mph'] if pd.notna(row['wind_speed_mph']) else 0
+        home_team = row['home_team'] if pd.notna(row['home_team']) else ''
         
         # Get ballpark info
         park_factor = get_ballpark_factor(home_team)
@@ -72,20 +72,21 @@ def analyze_weather_impact(conn, game_pk: int) -> Dict:
             temp_desc = f"Neutral temp ({temp}°F)"
         
         # Wind impact (simplified)
+        wind_impact = 0.0
+        wind_desc = "Calm conditions"
+        
         if wind_speed >= 15:
             # Check if it's Wrigley (wind-sensitive)
             if "Cubs" in home_team or "Wrigley" in str(row.get('venue_name', '')):
-                wind_impact = 0.20 if 180 <= (row['wind_direction_deg'] or 0) <= 270 else -0.20
-                wind_desc = f"Strong Wrigley wind ({wind_speed} mph)"
+                wind_direction = row['wind_direction_deg'] if pd.notna(row['wind_direction_deg']) else 0
+                wind_impact = 0.20 if 180 <= wind_direction <= 270 else -0.20
+                wind_desc = f"Strong Wrigley wind ({wind_speed:.1f} mph)"
             else:
                 wind_impact = 0.10  # General strong wind impact
-                wind_desc = f"Strong wind ({wind_speed} mph)"
+                wind_desc = f"Strong wind ({wind_speed:.1f} mph)"
         elif wind_speed >= 10:
             wind_impact = 0.05
-            wind_desc = f"Moderate wind ({wind_speed} mph)"
-        else:
-            wind_impact = 0.0
-            wind_desc = "Calm conditions"
+            wind_desc = f"Moderate wind ({wind_speed:.1f} mph)"
         
         # Combine impacts
         total_weather_impact = temp_impact + wind_impact
@@ -113,109 +114,94 @@ def analyze_weather_impact(conn, game_pk: int) -> Dict:
         }
         
     except Exception as e:
-        return {"impact": "ERROR", "factor": 1.0, "reason": f"Error: {e}"}
+        return {"impact": "ERROR", "factor": 1.0, "reason": f"Weather analysis error: {e}"}
 
 def analyze_umpire_impact(conn, game_pk: int) -> Dict:
-    """Simple umpire analysis focused on run totals"""
+    """FIXED: Umpire analysis with proper handling of empty data"""
     
     query = """
-    WITH ump_history AS (
-        SELECT u.umpire_name,
-               COUNT(*) as games_worked,
-               -- Estimate runs per game from Statcast events
-               AVG(
-                   (SELECT COUNT(*) FROM statcast s2 
-                    WHERE s2.game_pk = u.game_pk 
-                    AND s2.events IN ('single', 'double', 'triple', 'home_run', 'walk', 'hit_by_pitch')
-                   ) * 0.3  -- Rough conversion to runs
-               ) as avg_estimated_runs
-        FROM umpires u
-        WHERE u.position = 'Home Plate'
-        AND u.game_date >= %s
-        GROUP BY u.umpire_name
-        HAVING COUNT(*) >= 10  -- Minimum sample size
-    )
-    SELECT u.umpire_name, h.games_worked, h.avg_estimated_runs
-    FROM umpires u
-    LEFT JOIN ump_history h ON u.umpire_name = h.umpire_name
-    WHERE u.game_pk = %s AND u.position = 'Home Plate'
+    SELECT umpire_name, avg_total_runs_in_games, over_under_record, sample_size
+    FROM umpires 
+    WHERE game_pk = %s AND position = 'Home Plate'
     """
     
-    lookback_date = (datetime.now() - timedelta(days=365)).strftime('%Y-%m-%d')
-    
     try:
-        result = pd.read_sql(query, conn, params=[lookback_date, game_pk])
+        result = pd.read_sql(query, conn, params=[game_pk])
         if result.empty:
-            return {"impact": "NEUTRAL", "reason": "No umpire data"}
+            return {"impact": "NEUTRAL", "reason": "No umpire data available"}
         
         row = result.iloc[0]
-        umpire_name = row['umpire_name']
-        games_worked = row['games_worked'] or 0
-        avg_runs = row['avg_estimated_runs'] or 8.5
+        umpire_name = row['umpire_name'] if pd.notna(row['umpire_name']) else 'Unknown'
+        avg_runs = row['avg_total_runs_in_games'] if pd.notna(row['avg_total_runs_in_games']) else 8.5
+        over_pct = row['over_under_record'] if pd.notna(row['over_under_record']) else 0.5
+        sample_size = row['sample_size'] if pd.notna(row['sample_size']) else 0
         
         mlb_average = 8.5
         runs_diff = avg_runs - mlb_average
         
-        if games_worked >= 30:
+        # Confidence based on sample size
+        if sample_size >= 30:
             confidence = "HIGH"
-        elif games_worked >= 15:
+        elif sample_size >= 15:
             confidence = "MEDIUM"
         else:
             confidence = "LOW"
             
-        if runs_diff >= 1.0:
+        # Impact assessment
+        if runs_diff >= 1.0 or over_pct >= 0.60:
             impact = "STRONG OVER"
-        elif runs_diff >= 0.5:
+        elif runs_diff >= 0.5 or over_pct >= 0.55:
             impact = "OVER LEAN"
-        elif runs_diff <= -1.0:
+        elif runs_diff <= -1.0 or over_pct <= 0.40:
             impact = "STRONG UNDER"
-        elif runs_diff <= -0.5:
+        elif runs_diff <= -0.5 or over_pct <= 0.45:
             impact = "UNDER LEAN"
         else:
             impact = "NEUTRAL"
         
-        reason = f"{umpire_name}: {avg_runs:.1f} runs/game avg ({games_worked} games)"
+        reason = f"{umpire_name}: {avg_runs:.1f} runs/game avg, {over_pct:.1%} OVER rate ({sample_size} games)"
         
         return {
             "impact": impact,
             "umpire_name": umpire_name,
             "avg_runs": round(avg_runs, 1),
-            "sample_size": int(games_worked),
+            "sample_size": int(sample_size),
             "reason": reason,
             "confidence": confidence
         }
         
     except Exception as e:
-        return {"impact": "ERROR", "reason": f"Error: {e}"}
+        return {"impact": "ERROR", "reason": f"Umpire analysis error: {e}"}
 
 def analyze_pitcher_trends(conn, game_pk: int) -> Dict:
-    """Simple starting pitcher recent form analysis"""
+    """FIXED: Starting pitcher analysis using correct table names and handling empty data"""
     
+    # FIXED: Use 'games' table instead of 'statcast' and 'rosters' instead of 'roster'
     query = """
     WITH todays_starters AS (
-        SELECT DISTINCT s.pitcher, r.team_id
-        FROM statcast s
-        JOIN roster r ON s.pitcher = r.person_id AND s.game_date = r.game_date
-        WHERE s.game_pk = %s AND s.inning = 1
+        SELECT DISTINCT g.pitcher, r.team_id
+        FROM games g
+        JOIN rosters r ON g.pitcher = r.person_id AND g.game_date = r.game_date
+        WHERE g.game_pk = %s AND g.inning = 1
         LIMIT 2  -- Both starting pitchers
     ),
     pitcher_recent AS (
         SELECT ts.pitcher, ts.team_id,
-               COUNT(DISTINCT s.game_pk) as recent_starts,
-               -- Simplified ERA calculation
-               SUM(CASE WHEN s.events IN ('single', 'double', 'triple', 'home_run') THEN 1 ELSE 0 END) as hits_allowed,
-               SUM(CASE WHEN s.events = 'home_run' THEN 1 ELSE 0 END) as hrs_allowed,
-               COUNT(CASE WHEN s.events LIKE '%%strikeout%%' THEN 1 END) as strikeouts,
-               COUNT(CASE WHEN s.events IS NOT NULL THEN 1 END) as batters_faced
+               COUNT(DISTINCT g.game_pk) as recent_starts,
+               -- Simplified performance metrics
+               COUNT(CASE WHEN g.events IN ('single', 'double', 'triple', 'home_run') THEN 1 END) as hits_allowed,
+               COUNT(CASE WHEN g.events = 'home_run' THEN 1 END) as hrs_allowed,
+               COUNT(CASE WHEN g.events LIKE '%strikeout%' OR g.events = 'strikeout' THEN 1 END) as strikeouts,
+               COUNT(CASE WHEN g.events IS NOT NULL THEN 1 END) as batters_faced
         FROM todays_starters ts
-        JOIN statcast s ON ts.pitcher = s.pitcher
-        WHERE s.game_date >= %s AND s.game_date < %s
+        JOIN games g ON ts.pitcher = g.pitcher
+        WHERE g.game_date >= %s AND g.game_date < %s
         GROUP BY ts.pitcher, ts.team_id
     )
     SELECT pitcher, team_id, recent_starts, hits_allowed, hrs_allowed, 
            strikeouts, batters_faced
     FROM pitcher_recent
-    WHERE recent_starts >= 2
+    WHERE recent_starts >= 1  -- At least 1 start
     """
     
     game_date = datetime.now().strftime('%Y-%m-%d')
@@ -224,14 +210,15 @@ def analyze_pitcher_trends(conn, game_pk: int) -> Dict:
     try:
         result = pd.read_sql(query, conn, params=[game_pk, start_date, game_date])
         if result.empty:
-            return {"impact": "NEUTRAL", "reason": "No recent pitcher data"}
+            return {"impact": "NEUTRAL", "reason": "No recent pitcher data available"}
         
         pitcher_insights = []
         
         for _, pitcher in result.iterrows():
-            if pitcher['batters_faced'] > 0:
-                hits_per_bf = pitcher['hits_allowed'] / pitcher['batters_faced']
-                k_rate = pitcher['strikeouts'] / pitcher['batters_faced']
+            batters_faced = pitcher['batters_faced']
+            if batters_faced > 0:
+                hits_per_bf = pitcher['hits_allowed'] / batters_faced
+                k_rate = pitcher['strikeouts'] / batters_faced
                 
                 # Simple trend assessment
                 if hits_per_bf <= 0.20 and k_rate >= 0.25:
@@ -255,68 +242,92 @@ def analyze_pitcher_trends(conn, game_pk: int) -> Dict:
                     "starts": int(pitcher['recent_starts'])
                 })
         
+        if not pitcher_insights:
+            return {"impact": "NEUTRAL", "reason": "No pitcher performance data available"}
+        
         return {
             "pitchers": pitcher_insights,
-            "reason": f"Analyzed {len(pitcher_insights)} starting pitchers"
+            "reason": f"Analyzed {len(pitcher_insights)} starting pitcher(s)"
         }
         
     except Exception as e:
-        return {"impact": "ERROR", "reason": f"Error: {e}"}
+        return {"impact": "ERROR", "reason": f"Pitcher analysis error: {e}"}
 
 def analyze_team_trends(conn, game_pk: int) -> Dict:
-    """Simple team form analysis (last 10 games)"""
+    """FIXED: Team form analysis using correct table names and handling empty data"""
     
+    # FIXED: Use 'games' table instead of 'statcast' and 'rosters' instead of 'roster'
     query = """
     WITH game_teams AS (
-        SELECT DISTINCT 
-            CASE WHEN r.team_id = (SELECT DISTINCT r2.team_id FROM roster r2 
-                                   JOIN statcast s2 ON r2.person_id = s2.batter 
-                                   WHERE s2.game_pk = %s AND s2.inning_topbot = 'Bot' LIMIT 1)
-                 THEN 'home' ELSE 'away' END as home_away,
-            r.team_id
-        FROM roster r 
-        JOIN statcast s ON r.person_id = s.batter AND r.game_date = s.game_date
-        WHERE s.game_pk = %s
-        LIMIT 2
+        SELECT DISTINCT gi.home_team, gi.away_team
+        FROM game_info gi
+        WHERE gi.game_pk = %s
+        LIMIT 1
     ),
-    team_recent_games AS (
-        SELECT gt.team_id, gt.home_away,
-               COUNT(DISTINCT s.game_pk) as games_played,
-               -- Estimate runs scored
-               SUM(CASE WHEN s.events IN ('single', 'double', 'triple', 'home_run') THEN 1 ELSE 0 END) * 0.4 as est_runs_scored,
-               COUNT(CASE WHEN s.events = 'home_run' THEN 1 END) as home_runs
+    team_recent_performance AS (
+        SELECT 
+            gt.home_team as team_name,
+            'home' as home_away,
+            COUNT(DISTINCT g.game_pk) as games_played,
+            -- Estimate offensive performance
+            COUNT(CASE WHEN g.events IN ('single', 'double', 'triple', 'home_run') THEN 1 END) as hits,
+            COUNT(CASE WHEN g.events = 'home_run' THEN 1 END) as home_runs,
+            COUNT(CASE WHEN g.events IS NOT NULL THEN 1 END) as total_abs
         FROM game_teams gt
-        JOIN roster r ON gt.team_id = r.team_id
-        JOIN statcast s ON r.person_id = s.batter AND r.game_date = s.game_date
-        WHERE s.game_date >= %s AND s.game_date < %s
-        GROUP BY gt.team_id, gt.home_away
+        JOIN game_info gi ON (gi.home_team = gt.home_team OR gi.away_team = gt.home_team)
+        JOIN games g ON gi.game_pk = g.game_pk
+        WHERE g.game_date >= %s AND g.game_date < %s
+        GROUP BY gt.home_team
+        
+        UNION ALL
+        
+        SELECT 
+            gt.away_team as team_name,
+            'away' as home_away,
+            COUNT(DISTINCT g.game_pk) as games_played,
+            COUNT(CASE WHEN g.events IN ('single', 'double', 'triple', 'home_run') THEN 1 END) as hits,
+            COUNT(CASE WHEN g.events = 'home_run' THEN 1 END) as home_runs,
+            COUNT(CASE WHEN g.events IS NOT NULL THEN 1 END) as total_abs
+        FROM game_teams gt
+        JOIN game_info gi ON (gi.home_team = gt.away_team OR gi.away_team = gt.away_team)
+        JOIN games g ON gi.game_pk = g.game_pk
+        WHERE g.game_date >= %s AND g.game_date < %s
+        GROUP BY gt.away_team
     )
-    SELECT team_id, home_away, games_played, est_runs_scored, home_runs
-    FROM team_recent_games
-    WHERE games_played >= 5
+    SELECT team_name, home_away, games_played, hits, home_runs, total_abs
+    FROM team_recent_performance
+    WHERE games_played >= 1  -- At least 1 game
     """
     
     game_date = datetime.now().strftime('%Y-%m-%d')
     start_date = (datetime.now() - timedelta(days=15)).strftime('%Y-%m-%d')
     
     try:
-        result = pd.read_sql(query, conn, params=[game_pk, game_pk, start_date, game_date])
+        result = pd.read_sql(query, conn, params=[game_pk, start_date, game_date, start_date, game_date])
         if result.empty:
-            return {"impact": "NEUTRAL", "reason": "No recent team data"}
+            return {"impact": "NEUTRAL", "reason": "No recent team data available"}
         
         team_insights = []
         
         for _, team in result.iterrows():
-            if team['games_played'] > 0:
-                runs_per_game = team['est_runs_scored'] / team['games_played']
+            games_played = team['games_played']
+            total_abs = team['total_abs']
+            
+            if games_played > 0 and total_abs > 0:
+                # Calculate basic offensive metrics
+                hits_per_game = team['hits'] / games_played
+                hr_per_game = team['home_runs'] / games_played
                 
-                if runs_per_game >= 6.0:
+                # Estimate runs per game (rough conversion)
+                est_runs_per_game = hits_per_game * 0.6 + hr_per_game * 2.0
+                
+                if est_runs_per_game >= 6.0:
                     trend = "HOT OFFENSE"
                     impact = "OVER LEAN"
-                elif runs_per_game >= 5.0:
+                elif est_runs_per_game >= 4.5:
                     trend = "GOOD OFFENSE"
                     impact = "SLIGHT OVER"
-                elif runs_per_game <= 3.0:
+                elif est_runs_per_game <= 2.5:
                     trend = "COLD OFFENSE"
                     impact = "UNDER LEAN"
                 else:
@@ -325,54 +336,60 @@ def analyze_team_trends(conn, game_pk: int) -> Dict:
                 
                 team_insights.append({
                     "team": team['home_away'],
+                    "team_name": team['team_name'],
                     "trend": trend,
                     "impact": impact,
-                    "runs_per_game": round(runs_per_game, 1),
-                    "games": int(team['games_played'])
+                    "est_runs_per_game": round(est_runs_per_game, 1),
+                    "games": int(games_played)
                 })
+        
+        if not team_insights:
+            return {"impact": "NEUTRAL", "reason": "No team performance data available"}
         
         return {
             "teams": team_insights,
-            "reason": f"Analyzed recent form for both teams"
+            "reason": f"Analyzed recent form for {len(team_insights)} team(s)"
         }
         
     except Exception as e:
-        return {"impact": "ERROR", "reason": f"Error: {e}"}
+        return {"impact": "ERROR", "reason": f"Team analysis error: {e}"}
 
 def generate_combined_recommendation(weather: Dict, umpire: Dict, 
                                    pitchers: Dict, teams: Dict) -> Dict:
-    """Combine all factors into final betting recommendation"""
+    """FIXED: Combine all factors with proper error handling"""
     
     # Collect all directional signals
     over_signals = []
     under_signals = []
     
-    # Weather signals
-    if weather["impact"] in ["STRONG OVER", "OVER LEAN"]:
-        weight = 3 if "STRONG" in weather["impact"] else 1
-        over_signals.extend([weather["impact"]] * weight)
-    elif weather["impact"] in ["STRONG UNDER", "UNDER LEAN"]:
-        weight = 3 if "STRONG" in weather["impact"] else 1
-        under_signals.extend([weather["impact"]] * weight)
+    # Weather signals (only if no error)
+    if weather.get("impact") not in ["ERROR", None]:
+        if weather["impact"] in ["STRONG OVER", "OVER LEAN"]:
+            weight = 3 if "STRONG" in weather["impact"] else 1
+            over_signals.extend([weather["impact"]] * weight)
+        elif weather["impact"] in ["STRONG UNDER", "UNDER LEAN"]:
+            weight = 3 if "STRONG" in weather["impact"] else 1
+            under_signals.extend([weather["impact"]] * weight)
     
-    # Umpire signals
-    if umpire["impact"] in ["STRONG OVER", "OVER LEAN"]:
-        weight = 2 if "STRONG" in umpire["impact"] and umpire.get("confidence") == "HIGH" else 1
-        over_signals.extend([umpire["impact"]] * weight)
-    elif umpire["impact"] in ["STRONG UNDER", "UNDER LEAN"]:
-        weight = 2 if "STRONG" in umpire["impact"] and umpire.get("confidence") == "HIGH" else 1
-        under_signals.extend([umpire["impact"]] * weight)
+    # Umpire signals (only if no error)
+    if umpire.get("impact") not in ["ERROR", None]:
+        if umpire["impact"] in ["STRONG OVER", "OVER LEAN"]:
+            weight = 2 if "STRONG" in umpire["impact"] and umpire.get("confidence") == "HIGH" else 1
+            over_signals.extend([umpire["impact"]] * weight)
+        elif umpire["impact"] in ["STRONG UNDER", "UNDER LEAN"]:
+            weight = 2 if "STRONG" in umpire["impact"] and umpire.get("confidence") == "HIGH" else 1
+            under_signals.extend([umpire["impact"]] * weight)
     
-    # Pitcher signals (for opponent scoring)
-    if "pitchers" in pitchers:
+    # Pitcher signals (only if no error)
+    if "pitchers" in pitchers and pitchers.get("impact") != "ERROR":
         for pitcher in pitchers["pitchers"]:
             if "OVER" in pitcher["impact"]:
                 over_signals.append(pitcher["impact"])
             elif "UNDER" in pitcher["impact"]:
                 under_signals.append(pitcher["impact"])
     
-    # Team signals
-    if "teams" in teams:
+    # Team signals (only if no error)
+    if "teams" in teams and teams.get("impact") != "ERROR":
         for team in teams["teams"]:
             if "OVER" in team["impact"]:
                 over_signals.append(team["impact"])
@@ -405,36 +422,32 @@ def generate_combined_recommendation(weather: Dict, umpire: Dict,
         "over_signals": over_strength,
         "under_signals": under_strength,
         "key_factors": [
-            weather["reason"],
-            umpire["reason"],
-            pitchers["reason"],
-            teams["reason"]
+            weather.get("reason", "No weather data"),
+            umpire.get("reason", "No umpire data"),
+            pitchers.get("reason", "No pitcher data"),
+            teams.get("reason", "No team data")
         ]
     }
 
 def analyze_game(conn, game_pk: int) -> Dict:
-    """Complete analysis for a single game"""
+    """FIXED: Complete analysis with proper error handling"""
     
     print(f"🔍 Analyzing game {game_pk}...")
     
-    # Get basic game info
-    game_query = """
-    SELECT DISTINCT 
-        r1.team_id as home_team_id,
-        r2.team_id as away_team_id,
-        s.game_date
-    FROM statcast s
-    JOIN roster r1 ON s.batter = r1.person_id AND s.game_date = r1.game_date
-    JOIN roster r2 ON s.pitcher = r2.person_id AND s.game_date = r2.game_date  
-    WHERE s.game_pk = %s 
-    AND s.inning_topbot = 'Bot'  -- Home team batting
+    # FIXED: Check if game exists in database first
+    game_check_query = """
+    SELECT game_pk, game_date, home_team, away_team
+    FROM game_info 
+    WHERE game_pk = %s
     LIMIT 1
     """
     
     try:
-        game_info = pd.read_sql(game_query, conn, params=[game_pk])
+        game_info = pd.read_sql(game_check_query, conn, params=[game_pk])
         if game_info.empty:
-            return {"error": "Game not found"}
+            return {"error": f"Game {game_pk} not found in database"}
+        
+        game_row = game_info.iloc[0]
         
         # Analyze all factors
         weather = analyze_weather_impact(conn, game_pk)
@@ -447,7 +460,9 @@ def analyze_game(conn, game_pk: int) -> Dict:
         
         return {
             "game_pk": game_pk,
-            "game_date": game_info.iloc[0]['game_date'],
+            "game_date": str(game_row['game_date']),
+            "home_team": game_row['home_team'],
+            "away_team": game_row['away_team'],
             "weather_analysis": weather,
             "umpire_analysis": umpire,
             "pitcher_analysis": pitchers,
@@ -456,18 +471,18 @@ def analyze_game(conn, game_pk: int) -> Dict:
         }
         
     except Exception as e:
-        return {"error": f"Analysis failed: {e}"}
+        return {"error": f"Analysis failed for game {game_pk}: {e}"}
 
 def get_todays_analysis(conn, game_date: str = None) -> List[Dict]:
-    """Analyze all games for a given date"""
+    """FIXED: Analyze all games for a given date using correct table"""
     
     if game_date is None:
         game_date = datetime.now().strftime('%Y-%m-%d')
     
-    # Get all games for the date
+    # FIXED: Use 'game_info' table instead of 'statcast'
     games_query = """
-    SELECT DISTINCT game_pk 
-    FROM statcast 
+    SELECT game_pk, home_team, away_team
+    FROM game_info 
     WHERE game_date = %s 
     ORDER BY game_pk
     """
@@ -489,23 +504,27 @@ def get_todays_analysis(conn, game_date: str = None) -> List[Dict]:
         return [{"error": f"Database error: {e}"}]
 
 def print_daily_report(analyses: List[Dict]):
-    """Print formatted daily betting report"""
+    """FIXED: Print formatted daily betting report with better error handling"""
     
     print(f"\n🎯 DAILY MLB BETTING ANALYSIS")
     print("=" * 80)
     
     strong_bets = []
     moderate_bets = []
+    error_count = 0
     
     for analysis in analyses:
         if "error" in analysis:
+            error_count += 1
             print(f"❌ Error: {analysis['error']}")
             continue
         
         game_pk = analysis['game_pk']
+        home_team = analysis.get('home_team', 'Unknown')
+        away_team = analysis.get('away_team', 'Unknown')
         final_rec = analysis['final_recommendation']
         
-        print(f"\n🏟️ Game {game_pk}")
+        print(f"\n🏟️ Game {game_pk}: {away_team} @ {home_team}")
         print(f"   🎯 RECOMMENDATION: {final_rec['recommendation']}")
         print(f"   📊 Confidence: {final_rec['confidence']}")
         print(f"   🌤️ Weather: {analysis['weather_analysis']['impact']}")
@@ -518,25 +537,41 @@ def print_daily_report(analyses: List[Dict]):
             moderate_bets.append(analysis)
     
     # Summary
+    total_games = len(analyses)
+    successful_analyses = total_games - error_count
+    
     print(f"\n📋 DAILY SUMMARY:")
+    print(f"   🎲 Total games: {total_games}")
+    print(f"   ✅ Successful analyses: {successful_analyses}")
+    print(f"   ❌ Analysis errors: {error_count}")
     print(f"   🚨 High confidence bets: {len(strong_bets)}")
     print(f"   📊 Medium confidence bets: {len(moderate_bets)}")
     
     if strong_bets:
         print(f"\n🚨 TODAY'S BEST BETS:")
         for bet in strong_bets:
-            print(f"   🎯 Game {bet['game_pk']}: {bet['final_recommendation']['recommendation']}")
+            home_team = bet.get('home_team', 'Unknown')
+            away_team = bet.get('away_team', 'Unknown')
+            print(f"   🎯 {away_team} @ {home_team}: {bet['final_recommendation']['recommendation']}")
+    
+    if error_count > 0:
+        print(f"\n💡 Note: {error_count} games had analysis errors. This is normal if data is still being collected.")
 
 def main():
-    """Run daily analysis"""
+    """FIXED: Run daily analysis with better error handling"""
     
-    from py.config import require_config
-    
-    config = require_config(require_database=True)
-    dsn = config.PG_DSN
+    try:
+        from py.config import require_config
+        config = require_config(require_database=True, graceful_degradation=True)
+        dsn = config.PG_DSN
+    except Exception as e:
+        print(f"❌ Configuration error: {e}")
+        print("💡 Make sure to run: python setup_env.py")
+        return
     
     if not dsn:
         print("❌ PG_DSN environment variable must be set")
+        print("💡 Run: python setup_env.py to configure database connection")
         return
     
     try:
@@ -547,8 +582,11 @@ def main():
         analyses = get_todays_analysis(conn)
         print_daily_report(analyses)
         
+    except psycopg2.Error as e:
+        print(f"❌ Database error: {e}")
+        print("💡 Check if database is running and accessible")
     except Exception as e:
-        print(f"❌ Error: {e}")
+        print(f"❌ Unexpected error: {e}")
         import traceback
         traceback.print_exc()
     finally:

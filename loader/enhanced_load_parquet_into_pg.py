@@ -18,6 +18,26 @@ import pandas as pd
 import psycopg2
 import numpy as np
 
+def fix_nullable_integers(df):
+    """Fix nullable integer columns that get converted to float during CSV export"""
+    integer_columns = [
+        'runner_on_1b', 'runner_on_2b', 'runner_on_3b',  # play_by_play table
+        'person_id', 'team_id', 'batting_order',           # lineups table  
+        'umpire_id',                                        # umpires table
+        'game_pk', 'at_bat_number', 'pitch_number',        # games table
+        'batter', 'pitcher'                                 # games table
+    ]
+    
+    for col in integer_columns:
+        if col in df.columns:
+            if df[col].dtype == 'float64':
+                # Convert float64 with NaNs to nullable integers
+                df[col] = df[col].astype('Int64')
+            elif df[col].dtype == 'Int64':
+                # Keep as nullable integer, but ensure clean conversion for CSV
+                pass
+    
+    return df
 
 def retry_database_operation(max_retries=3, delay=1):
     """Decorator to retry database operations with exponential backoff"""
@@ -343,7 +363,7 @@ def load_table(conn, table: str, df: pd.DataFrame):
         
         # Handle nullable integer columns
         if str(df_to_load[col].dtype).startswith('Int'):
-            df_to_load[col] = df_to_load[col].astype('float64')  # Use float to preserve NaN
+            #df_to_load[col] = df_to_load[col].astype('float64') # FIXED: Removed problematic conversion  # Use float to preserve NaN
         
         # FIXED: Handle date columns properly
         if col.endswith('_date') or 'date' in col.lower():
@@ -554,6 +574,10 @@ def load_all_files_in_transaction(conn, files_and_tables: List[tuple]):
             try:
                 # FIXED: Better parquet file handling
                 df = pd.read_parquet(file_path)
+                integer_columns = ['runner_on_1b', 'runner_on_2b', 'runner_on_3b', 'person_id', 'team_id', 'umpire_id', 'game_pk']
+                for col in integer_columns:
+                    if col in df.columns and df[col].dtype in ['float64', 'Float64']:
+                        df[col] = df[col].round().astype('Int64')
                 print(f"   📊 Read parquet: {len(df)} rows, {len(df.columns)} columns")
                 
                 if df.empty:

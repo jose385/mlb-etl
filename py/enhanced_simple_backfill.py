@@ -444,10 +444,10 @@ def collect_play_by_play_data(date_str: str, out_dir: Path, use_placeholder: boo
                             else:
                                 home_score += rbi
                     
-                    # Runners on base (simplified)
-                    runner_1b = generator.generate_pitcher_id(batting_team, False) if generator.rng.random() < 0.2 else None
-                    runner_2b = generator.generate_pitcher_id(batting_team, False) if generator.rng.random() < 0.15 else None
-                    runner_3b = generator.generate_pitcher_id(batting_team, False) if generator.rng.random() < 0.1 else None
+                    # FINAL FIX: Generate runners as integers or pd.NA (not None)
+                    runner_1b = int(generator.generate_pitcher_id(batting_team, False)) if generator.rng.random() < 0.2 else pd.NA
+                    runner_2b = int(generator.generate_pitcher_id(batting_team, False)) if generator.rng.random() < 0.15 else pd.NA
+                    runner_3b = int(generator.generate_pitcher_id(batting_team, False)) if generator.rng.random() < 0.1 else pd.NA
                     
                     play_data = {
                         'game_date': date_str,
@@ -472,15 +472,22 @@ def collect_play_by_play_data(date_str: str, out_dir: Path, use_placeholder: boo
                         'away_score': away_score,
                         'is_scoring_play': is_scoring,
                         'rbi': rbi,
-                        'runner_on_1b': int(runner_1b) if runner_1b is not None else None,
-                        'runner_on_2b': int(runner_2b) if runner_2b is not None else None,
-                        'runner_on_3b': int(runner_3b) if runner_3b is not None else None,
+                        # FINAL FIX: Use pd.NA instead of None for nullable integers
+                        'runner_on_1b': runner_1b,
+                        'runner_on_2b': runner_2b,
+                        'runner_on_3b': runner_3b,
                     }
                     
                     all_plays.append(play_data)
             
             if all_plays:
                 df_plays = pd.DataFrame(all_plays)
+                
+                # FINAL FIX: Explicitly set nullable integer types
+                df_plays['runner_on_1b'] = df_plays['runner_on_1b'].astype('Int64')
+                df_plays['runner_on_2b'] = df_plays['runner_on_2b'].astype('Int64')
+                df_plays['runner_on_3b'] = df_plays['runner_on_3b'].astype('Int64')
+                
                 df_plays.to_parquet(out_file, index=False)
                 print(f"✅ Placeholder play-by-play: {len(df_plays)} plays → {out_file.name}")
             else:

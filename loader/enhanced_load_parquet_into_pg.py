@@ -542,7 +542,8 @@ def load_all_files_in_transaction(conn, files_and_tables: List[tuple]):
             try:
                 # Read parquet file
                 df = pd.read_parquet(file_path)
-                integer_columns = ['runner_on_1b', 'runner_on_2b', 'runner_on_3b', 'person_id', 'team_id', 'umpire_id', 'game_pk']
+                integer_columns = ['runner_on_1b', 'runner_on_2b', 'runner_on_3b', 'person_id', 'team_id', 'umpire_id', 'game_pk',
+                   'season_home_runs', 'season_rbi', 'season_strikeouts', 'at_bat_number', 'pitch_number', 'batter', 'pitcher']
                 for col in integer_columns:
                     if col in df.columns and df[col].dtype in ['float64', 'Float64']:
                         df[col] = df[col].round().astype('Int64')

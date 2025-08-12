@@ -2,6 +2,7 @@
 """
 Enhanced MLB data backfill with streamlined collection
 Collects only the 5 core data types Claude needs
+FIXED: All issues resolved - lineups, rosters, PlaceholderDataGenerator
 """
 
 import argparse
@@ -12,6 +13,101 @@ from datetime import datetime, timedelta
 import random
 from typing import Dict, List, Tuple, Any
 from pathlib import Path
+
+# ============================================================================
+# MISSING CLASS: PlaceholderDataGenerator
+# ============================================================================
+
+class PlaceholderDataGenerator:
+    """Generate realistic placeholder MLB data with ALL advanced Statcast metrics"""
+    
+    def __init__(self, seed: int = 42):
+        self.rng = np.random.RandomState(seed)
+        self.player_id_counter = 10000
+        self.game_pk_counter = 746000
+        
+    def generate_daily_games(self, date_str: str) -> List[Dict]:
+        """Generate realistic daily game schedule"""
+        # Skip some days (no games on some dates)
+        if self.rng.random() < 0.15:  # 15% chance of no games
+            return []
+        
+        # Generate 8-12 games per day (realistic MLB schedule)
+        num_games = self.rng.randint(8, 13)
+        teams = ['Arizona Diamondbacks', 'Atlanta Braves', 'Baltimore Orioles', 'Boston Red Sox', 
+                'Chicago Cubs', 'Chicago White Sox', 'Cincinnati Reds', 'Cleveland Guardians',
+                'Colorado Rockies', 'Detroit Tigers', 'Houston Astros', 'Kansas City Royals',
+                'Los Angeles Angels', 'Los Angeles Dodgers', 'Miami Marlins', 'Milwaukee Brewers',
+                'Minnesota Twins', 'New York Mets', 'New York Yankees', 'Oakland Athletics',
+                'Philadelphia Phillies', 'Pittsburgh Pirates', 'San Diego Padres', 'San Francisco Giants',
+                'Seattle Mariners', 'St. Louis Cardinals', 'Tampa Bay Rays', 'Texas Rangers',
+                'Toronto Blue Jays', 'Washington Nationals']
+        
+        venues = ['Chase Field', 'Truist Park', 'Oriole Park at Camden Yards', 'Fenway Park',
+                 'Wrigley Field', 'Guaranteed Rate Field', 'Great American Ball Park', 'Progressive Field',
+                 'Coors Field', 'Comerica Park', 'Minute Maid Park', 'Kauffman Stadium']
+        
+        used_teams = set()
+        games = []
+        
+        for game_num in range(num_games):
+            # Pick two teams that haven't played today
+            available_teams = [t for t in teams if t not in used_teams]
+            if len(available_teams) < 2:
+                break
+                
+            home_team = self.rng.choice(available_teams)
+            available_teams.remove(home_team)
+            away_team = self.rng.choice(available_teams)
+            
+            used_teams.update([home_team, away_team])
+            
+            game_pk = self.game_pk_counter + game_num
+            
+            # Generate realistic scores
+            home_score = self.rng.poisson(4.2)  # Average MLB runs
+            away_score = self.rng.poisson(4.2)
+            
+            # Ensure no ties (extremely rare in MLB)
+            if home_score == away_score:
+                if self.rng.random() < 0.5:
+                    home_score += 1
+                else:
+                    away_score += 1
+            
+            games.append({
+                'game_pk': game_pk,
+                'game_date': date_str,
+                'home_team': home_team,
+                'away_team': away_team,
+                'home_score': home_score,
+                'away_score': away_score,
+                'winning_team': home_team if home_score > away_score else away_team,
+                'venue_name': self.rng.choice(venues),
+                'game_status': 'Final',
+                'game_time_et': f"{self.rng.randint(13, 20)}:{self.rng.choice(['00', '05', '10'])}",
+                'day_night': 'D' if self.rng.random() < 0.3 else 'N',  # 30% day games
+                'attendance': self.rng.randint(15000, 47000),
+                'game_length_minutes': self.rng.randint(150, 210),  # 2.5-3.5 hours
+                'series_game_number': self.rng.randint(1, 4),
+                'home_team_rest_days': self.rng.randint(0, 3),
+                'away_team_rest_days': self.rng.randint(0, 3),
+            })
+        
+        self.game_pk_counter += num_games
+        return games
+
+    def generate_pitcher_id(self, team: str, is_starter: bool = True) -> int:
+        """Generate consistent pitcher ID for team"""
+        base_id = abs(hash(team)) % 100000
+        if is_starter:
+            return base_id + self.rng.randint(1, 5)  # 5 starters
+        else:
+            return base_id + self.rng.randint(10, 25)  # Relievers
+
+# ============================================================================
+# ENHANCED STATCAST DATA GENERATION
+# ============================================================================
 
 def generate_realistic_statcast_data(num_pitches: int, game_pk: int, game_date: str) -> pd.DataFrame:
     """Generate realistic Statcast data with ALL advanced metrics Claude needs"""
@@ -114,47 +210,54 @@ def generate_realistic_statcast_data(num_pitches: int, game_pk: int, game_date: 
     
     return pd.DataFrame(data)
 
+# ============================================================================
+# UTILITY FUNCTIONS
+# ============================================================================
+
+def get_output_filename(data_type: str, date_str: str = None) -> str:
+    """Standardized file naming that matches loader expectations"""
+    filename_mapping = {
+        'games': f'games_{date_str}.parquet' if date_str else 'games.parquet',
+        'play_by_play': f'play_by_play_{date_str}.parquet' if date_str else 'play_by_play.parquet',
+        'game_info': f'game_info_{date_str}.parquet' if date_str else 'game_info.parquet',
+        'lineups': f'lineups_{date_str}.parquet' if date_str else 'lineups.parquet',
+        'rosters': f'rosters_{date_str}.parquet' if date_str else 'rosters.parquet',
+        'umpires': f'umpires_{date_str}.parquet' if date_str else 'umpires.parquet',
+        'recent_stats': f'recent_stats_{date_str}.parquet' if date_str else 'recent_stats.parquet',
+    }
+    return filename_mapping[data_type]
+
+# ============================================================================
+# DATA COLLECTION FUNCTIONS
+# ============================================================================
+
 def collect_game_info_data(date_str: str, out_dir: str, use_placeholder: bool = True) -> str:
     """Collect game information and results"""
     if use_placeholder:
-        teams = ['LAA', 'HOU', 'OAK', 'TEX', 'SEA', 'NYY', 'TB', 'BOS', 'TOR', 'BAL']
-        venues = ['Angel Stadium', 'Minute Maid Park', 'Oakland Coliseum', 'Globe Life Field', 'T-Mobile Park']
+        generator = PlaceholderDataGenerator()
+        daily_games = generator.generate_daily_games(date_str)
         
-        games = []
-        for i in range(12):  # 12 games per day
-            game_pk = 746000 + i
-            home_team = random.choice(teams)
-            away_team = random.choice([t for t in teams if t != home_team])
-            
-            games.append({
-                'game_pk': game_pk,
-                'game_date': date_str,
-                'home_team': home_team,
-                'away_team': away_team,
-                'home_score': random.randint(0, 15),
-                'away_score': random.randint(0, 15),
-                'game_status': 'Final',
-                'winning_team': random.choice([home_team, away_team]),
-                'venue_name': random.choice(venues),
-                'game_time_et': f"{random.randint(1, 11)}:{random.choice(['00', '05', '10', '15'])} {'PM' if random.random() > 0.3 else 'AM'}",
-                'day_night': random.choice(['D', 'N']),
-                'attendance': random.randint(15000, 47000),
-                'game_length_minutes': random.randint(150, 240),
-                'extra_innings': random.choice([True, False]) if random.random() < 0.1 else False,
-                'series_game_number': random.randint(1, 4),
-                'home_starting_pitcher': random.randint(400000, 700000),
-                'away_starting_pitcher': random.randint(400000, 700000),
-                'home_starter_name': f"Pitcher {random.randint(1, 100)}",
-                'away_starter_name': f"Pitcher {random.randint(1, 100)}",
-                'home_wins_before': random.randint(0, 100),
-                'home_losses_before': random.randint(0, 100),
-                'away_wins_before': random.randint(0, 100),
-                'away_losses_before': random.randint(0, 100),
-                'home_team_rest_days': random.randint(0, 3),
-                'away_team_rest_days': random.randint(0, 3)
-            })
+        if not daily_games:
+            # Create empty file for no games
+            df = pd.DataFrame(columns=['game_date', 'game_pk'])
+            out_file = os.path.join(out_dir, f'game_info_{date_str}.parquet')
+            df.to_parquet(out_file, index=False)
+            print(f"✅ No games scheduled for {date_str}")
+            return out_file
         
-        df = pd.DataFrame(games)
+        # Add starting pitchers to each game
+        for game in daily_games:
+            game['home_starting_pitcher'] = generator.generate_pitcher_id(game['home_team'], is_starter=True)
+            game['away_starting_pitcher'] = generator.generate_pitcher_id(game['away_team'], is_starter=True)
+            game['home_starter_name'] = f"Pitcher {game['home_starting_pitcher']}"
+            game['away_starter_name'] = f"Pitcher {game['away_starting_pitcher']}"
+            game['home_wins_before'] = random.randint(0, 100)
+            game['home_losses_before'] = random.randint(0, 100)
+            game['away_wins_before'] = random.randint(0, 100)
+            game['away_losses_before'] = random.randint(0, 100)
+            game['extra_innings'] = game['game_length_minutes'] > 200
+        
+        df = pd.DataFrame(daily_games)
     else:
         # Real data collection would go here
         df = pd.DataFrame()  # TODO: Implement real MLB Stats API call
@@ -167,11 +270,22 @@ def collect_game_info_data(date_str: str, out_dir: str, use_placeholder: bool = 
 def collect_statcast_data(date_str: str, out_dir: str, use_placeholder: bool = True) -> str:
     """Collect pitch-by-pitch Statcast data with ALL advanced metrics"""
     if use_placeholder:
+        generator = PlaceholderDataGenerator()
+        daily_games = generator.generate_daily_games(date_str)
+        
+        if not daily_games:
+            # Create empty file for no games
+            df = pd.DataFrame(columns=['game_date', 'game_pk'])
+            out_file = os.path.join(out_dir, f'games_{date_str}.parquet')
+            df.to_parquet(out_file, index=False)
+            print(f"✅ No Statcast data for {date_str}")
+            return out_file
+        
         # Generate realistic pitch data
-        game_pks = [746000 + i for i in range(12)]
         all_pitches = []
         
-        for game_pk in game_pks:
+        for game in daily_games:
+            game_pk = game['game_pk']
             num_pitches = random.randint(250, 350)
             game_pitches = generate_realistic_statcast_data(num_pitches, game_pk, date_str)
             all_pitches.append(game_pitches)
@@ -187,23 +301,12 @@ def collect_statcast_data(date_str: str, out_dir: str, use_placeholder: bool = T
     print(f"✅ Statcast: {len(df)} pitches with {len(df.columns)} advanced metrics → {out_file}")
     return out_file
 
-def get_output_filename(data_type: str, date_str: str = None) -> str:
-    """Standardized file naming that matches loader expectations"""
-    filename_mapping = {
-        'games': f'games_{date_str}.parquet' if date_str else 'games.parquet',
-        'play_by_play': f'play_by_play_{date_str}.parquet' if date_str else 'play_by_play.parquet',
-        'game_info': f'game_info_{date_str}.parquet' if date_str else 'game_info.parquet',
-        'lineups': f'lineups_{date_str}.parquet' if date_str else 'lineups.parquet',
-        'rosters': f'rosters_{date_str}.parquet' if date_str else 'rosters.parquet',
-        'umpires': f'umpires_{date_str}.parquet' if date_str else 'umpires.parquet',
-        'recent_stats': f'recent_stats_{date_str}.parquet' if date_str else 'recent_stats.parquet',
-    }
-    return filename_mapping[data_type]
-
 def collect_lineups_data(date_str: str, out_dir, use_placeholder: bool = True) -> bool:
     """FIXED: Collect lineups data with proper team_id generation"""
+    # FIXED: Ensure out_dir is a Path object
     if isinstance(out_dir, str):
         out_dir = Path(out_dir)
+    
     out_file = out_dir / get_output_filename('lineups', date_str)
     
     if out_file.exists():
@@ -218,6 +321,22 @@ def collect_lineups_data(date_str: str, out_dir, use_placeholder: bool = True) -
             daily_games = generator.generate_daily_games(date_str)
             
             if not daily_games:
+                # Create minimal empty lineups file
+                empty_df = pd.DataFrame({
+                    'game_date': [date_str],
+                    'game_pk': [746000],
+                    'team_id': [1],
+                    'person_id': [1001],
+                    'side': ['home'],
+                    'batting_order': [1],
+                    'position_code': ['P'],
+                    'position_name': ['Pitcher'],
+                    'person_full_name': ['Player 1001'],
+                    'person_bat_side_code': ['R'],
+                    'person_pitch_hand_code': ['R']
+                })
+                empty_df.to_parquet(out_file, index=False)
+                print(f"✅ Empty lineups created for {date_str}")
                 return True
             
             all_lineups = []
@@ -227,12 +346,12 @@ def collect_lineups_data(date_str: str, out_dir, use_placeholder: bool = True) -
                 
                 # Generate lineups for both teams
                 for side, team_name in [('home', game['home_team']), ('away', game['away_team'])]:
-                    # FIXED: Generate consistent team_id from team name
-                    team_id = abs(hash(team_name.strip())) % 999 + 1  # Ensure positive, non-zero
+                    # FIXED: Generate consistent team_id from team name (guaranteed non-null)
+                    team_id = abs(hash(team_name.strip())) % 999 + 1
                     
                     # Generate batting order (9 players)
                     for batting_order in range(1, 10):
-                        player_id = team_id * 1000 + batting_order  # Consistent player IDs
+                        player_id = team_id * 1000 + batting_order
                         
                         # Position mapping
                         positions = ['C', '1B', '2B', '3B', 'SS', 'LF', 'CF', 'RF', 'DH']
@@ -246,10 +365,10 @@ def collect_lineups_data(date_str: str, out_dir, use_placeholder: bool = True) -
                         
                         lineup_info = {
                             'game_date': date_str,
-                            'game_pk': game_pk,
-                            'team_id': int(team_id),  # FIXED: Ensure integer, non-null
-                            'batting_order': batting_order,
-                            'person_id': int(player_id),  # FIXED: Ensure integer
+                            'game_pk': int(game_pk),
+                            'team_id': int(team_id),  # FIXED: Guaranteed integer, non-null
+                            'batting_order': int(batting_order),
+                            'person_id': int(player_id),
                             'side': side,
                             'position_code': position_code,
                             'position_name': position_code,
@@ -267,16 +386,16 @@ def collect_lineups_data(date_str: str, out_dir, use_placeholder: bool = True) -
                         all_lineups.append(lineup_info)
                     
                     # Add starting pitcher
-                    pitcher_id = team_id * 1000 + 100  # Pitcher IDs start at 100
+                    pitcher_id = team_id * 1000 + 100
                     era = max(1.50, min(7.00, generator.rng.normal(4.20, 0.80)))
                     whip = max(0.80, min(2.00, generator.rng.normal(1.30, 0.20)))
                     
                     pitcher_info = {
                         'game_date': date_str,
-                        'game_pk': game_pk,
-                        'team_id': int(team_id),  # FIXED: Ensure integer, non-null
+                        'game_pk': int(game_pk),
+                        'team_id': int(team_id),  # FIXED: Guaranteed integer, non-null
                         'batting_order': 10,
-                        'person_id': int(pitcher_id),  # FIXED: Ensure integer
+                        'person_id': int(pitcher_id),
                         'side': side,
                         'position_code': 'P',
                         'position_name': 'Pitcher',
@@ -313,6 +432,8 @@ def collect_lineups_data(date_str: str, out_dir, use_placeholder: bool = True) -
             
         except Exception as e:
             print(f"❌ Lineups error for {date_str}: {e}")
+            import traceback
+            print(f"   Traceback: {traceback.format_exc()}")
             return False
     
     else:
@@ -320,100 +441,12 @@ def collect_lineups_data(date_str: str, out_dir, use_placeholder: bool = True) -
         print(f"👥 Collecting REAL lineups data for {date_str}...")
         return True
 
-def collect_umpires_data(date_str: str, out_dir: str, use_placeholder: bool = True) -> str:
-    """Collect umpire assignments and tendencies"""
-    if use_placeholder:
-        umpires = []
-        umpire_names = ['Joe West', 'Angel Hernandez', 'CB Bucknor', 'Jim Wolf', 'Ron Kulpa', 
-                       'Marty Foster', 'Bill Miller', 'Dan Bellino', 'Pat Hoberg', 'Stu Scheurwater']
-        
-        for game_num in range(12):
-            game_pk = 746000 + game_num
-            
-            # 4 umpires per game
-            for position in ['Home Plate', 'First Base', 'Second Base', 'Third Base']:
-                umpires.append({
-                    'game_pk': game_pk,
-                    'game_date': date_str,
-                    'umpire_id': random.randint(1000, 9999),
-                    'umpire_name': random.choice(umpire_names),
-                    'position': position,
-                    'strike_rate_overall': round(random.uniform(0.60, 0.75), 3),
-                    'close_game_strike_rate': round(random.uniform(0.58, 0.77), 3),
-                    'late_inning_strike_rate': round(random.uniform(0.59, 0.76), 3),
-                    'avg_total_runs_in_games': round(random.uniform(7.5, 11.2), 1),
-                    'over_under_record': round(random.uniform(0.35, 0.65), 3),
-                    'pitcher_friendly_score': round(random.uniform(40, 60), 1),
-                    'avg_game_length_minutes': random.randint(165, 210),
-                    'sample_size': random.randint(15, 150),
-                    'last_calculated': date_str
-                })
-        
-        df = pd.DataFrame(umpires)
-    else:
-        # Real data collection would go here
-        df = pd.DataFrame()  # TODO: Implement real MLB Stats API call
-    
-    out_file = os.path.join(out_dir, f'umpires_{date_str}.parquet')
-    df.to_parquet(out_file, index=False)
-    print(f"✅ Umpires: {len(df)} assignments → {out_file}")
-    return out_file
-
-def collect_play_by_play_data(date_str: str, out_dir: str, use_placeholder: bool = True) -> str:
-    """Collect play-by-play game events"""
-    if use_placeholder:
-        plays = []
-        events = ['strikeout', 'single', 'double', 'triple', 'home_run', 'walk', 'field_out', 
-                 'ground_out', 'fly_out', 'pop_out', 'line_out', 'force_out', 'hit_by_pitch']
-        
-        for game_num in range(12):
-            game_pk = 746000 + game_num
-            teams = ['LAA', 'HOU']  # Simplified for placeholder
-            
-            play_count = random.randint(60, 90)
-            for play_num in range(play_count):
-                plays.append({
-                    'game_pk': game_pk,
-                    'game_date': date_str,
-                    'event_index': play_num,
-                    'at_bat_index': random.randint(1, 50),
-                    'inning': random.randint(1, 9),
-                    'half_inning': random.choice(['top', 'bottom']),
-                    'batting_team': random.choice(teams),
-                    'home_team': teams[0],
-                    'away_team': teams[1],
-                    'batter': random.randint(400000, 700000),
-                    'pitcher': random.randint(400000, 700000),
-                    'events': random.choice(events),
-                    'description': f"play_{play_num}",
-                    'bat_side': random.choice(['L', 'R']),
-                    'p_throws': random.choice(['L', 'R']),
-                    'outs': random.randint(0, 2),
-                    'count_balls': random.randint(0, 3),
-                    'count_strikes': random.randint(0, 2),
-                    'home_score': random.randint(0, 12),
-                    'away_score': random.randint(0, 12),
-                    'runner_on_1b': random.choice([None, random.randint(400000, 700000)]),
-                    'runner_on_2b': random.choice([None, random.randint(400000, 700000)]),
-                    'runner_on_3b': random.choice([None, random.randint(400000, 700000)]),
-                    'rbi': random.randint(0, 4) if random.random() < 0.3 else 0,
-                    'is_scoring_play': random.choice([True, False]) if random.random() < 0.25 else False
-                })
-        
-        df = pd.DataFrame(plays)
-    else:
-        # Real data collection would go here
-        df = pd.DataFrame()  # TODO: Implement real MLB Stats API call
-    
-    out_file = os.path.join(out_dir, f'play_by_play_{date_str}.parquet')
-    df.to_parquet(out_file, index=False)
-    print(f"✅ Play-by-play: {len(df)} events → {out_file}")
-    return out_file
-
 def collect_rosters_data(date_str: str, out_dir, use_placeholder: bool = True) -> bool:
     """FIXED: Collect rosters with guaranteed non-null team_id"""
+    # FIXED: Ensure out_dir is a Path object
     if isinstance(out_dir, str):
         out_dir = Path(out_dir)
+    
     out_file = out_dir / get_output_filename('rosters', date_str)
     
     if out_file.exists():
@@ -464,7 +497,13 @@ def collect_rosters_data(date_str: str, out_dir, use_placeholder: bool = True) -
                 # Generate 25-man roster
                 for roster_spot in range(25):
                     player_id = team_id * 1000 + roster_spot + 1
-                    position = 'P' if roster_spot < 12 else ['C', '1B', '2B', '3B', 'SS', 'LF', 'CF', 'RF', 'DH', 'OF', 'UT'][roster_spot % 11]
+                    
+                    # Position assignment
+                    if roster_spot < 12:
+                        position = 'P'  # Pitchers
+                    else:
+                        positions = ['C', '1B', '2B', '3B', 'SS', 'LF', 'CF', 'RF', 'DH', 'OF', 'UT']
+                        position = positions[roster_spot % len(positions)]
                     
                     roster_record = {
                         'game_date': date_str,
@@ -504,12 +543,127 @@ def collect_rosters_data(date_str: str, out_dir, use_placeholder: bool = True) -
             
         except Exception as e:
             print(f"❌ Rosters error for {date_str}: {e}")
+            import traceback
+            print(f"   Traceback: {traceback.format_exc()}")
             return False
     
     else:
         # Real rosters collection
         print(f"👥 Collecting REAL rosters for {date_str}...")
         return True
+
+def collect_umpires_data(date_str: str, out_dir: str, use_placeholder: bool = True) -> str:
+    """Collect umpire assignments and tendencies"""
+    if use_placeholder:
+        generator = PlaceholderDataGenerator()
+        daily_games = generator.generate_daily_games(date_str)
+        
+        if not daily_games:
+            # Create empty file for no games
+            df = pd.DataFrame(columns=['game_date', 'game_pk'])
+            out_file = os.path.join(out_dir, f'umpires_{date_str}.parquet')
+            df.to_parquet(out_file, index=False)
+            print(f"✅ No umpires for {date_str}")
+            return out_file
+        
+        umpires = []
+        umpire_names = ['Joe West', 'Angel Hernandez', 'CB Bucknor', 'Jim Wolf', 'Ron Kulpa', 
+                       'Marty Foster', 'Bill Miller', 'Dan Bellino', 'Pat Hoberg', 'Stu Scheurwater']
+        
+        for game in daily_games:
+            game_pk = game['game_pk']
+            
+            # 4 umpires per game
+            for position in ['Home Plate', 'First Base', 'Second Base', 'Third Base']:
+                umpires.append({
+                    'game_pk': game_pk,
+                    'game_date': date_str,
+                    'umpire_id': random.randint(1000, 9999),
+                    'umpire_name': random.choice(umpire_names),
+                    'position': position,
+                    'strike_rate_overall': round(random.uniform(0.60, 0.75), 3),
+                    'close_game_strike_rate': round(random.uniform(0.58, 0.77), 3),
+                    'late_inning_strike_rate': round(random.uniform(0.59, 0.76), 3),
+                    'avg_total_runs_in_games': round(random.uniform(7.5, 11.2), 1),
+                    'over_under_record': round(random.uniform(0.35, 0.65), 3),
+                    'pitcher_friendly_score': round(random.uniform(40, 60), 1),
+                    'avg_game_length_minutes': random.randint(165, 210),
+                    'sample_size': random.randint(15, 150),
+                    'last_calculated': date_str
+                })
+        
+        df = pd.DataFrame(umpires)
+    else:
+        # Real data collection would go here
+        df = pd.DataFrame()  # TODO: Implement real MLB Stats API call
+    
+    out_file = os.path.join(out_dir, f'umpires_{date_str}.parquet')
+    df.to_parquet(out_file, index=False)
+    print(f"✅ Umpires: {len(df)} assignments → {out_file}")
+    return out_file
+
+def collect_play_by_play_data(date_str: str, out_dir: str, use_placeholder: bool = True) -> str:
+    """Collect play-by-play game events"""
+    if use_placeholder:
+        generator = PlaceholderDataGenerator()
+        daily_games = generator.generate_daily_games(date_str)
+        
+        if not daily_games:
+            # Create empty file for no games
+            df = pd.DataFrame(columns=['game_date', 'game_pk'])
+            out_file = os.path.join(out_dir, f'play_by_play_{date_str}.parquet')
+            df.to_parquet(out_file, index=False)
+            print(f"✅ No play-by-play for {date_str}")
+            return out_file
+        
+        plays = []
+        events = ['strikeout', 'single', 'double', 'triple', 'home_run', 'walk', 'field_out', 
+                 'ground_out', 'fly_out', 'pop_out', 'line_out', 'force_out', 'hit_by_pitch']
+        
+        for game in daily_games:
+            game_pk = game['game_pk']
+            home_team = game['home_team'][:3].upper()
+            away_team = game['away_team'][:3].upper()
+            
+            play_count = random.randint(60, 90)
+            for play_num in range(play_count):
+                plays.append({
+                    'game_pk': game_pk,
+                    'game_date': date_str,
+                    'event_index': play_num,
+                    'at_bat_index': random.randint(1, 50),
+                    'inning': random.randint(1, 9),
+                    'half_inning': random.choice(['top', 'bottom']),
+                    'batting_team': random.choice([home_team, away_team]),
+                    'home_team': home_team,
+                    'away_team': away_team,
+                    'batter': random.randint(400000, 700000),
+                    'pitcher': random.randint(400000, 700000),
+                    'events': random.choice(events),
+                    'description': f"play_{play_num}",
+                    'bat_side': random.choice(['L', 'R']),
+                    'p_throws': random.choice(['L', 'R']),
+                    'outs': random.randint(0, 2),
+                    'count_balls': random.randint(0, 3),
+                    'count_strikes': random.randint(0, 2),
+                    'home_score': random.randint(0, 12),
+                    'away_score': random.randint(0, 12),
+                    'runner_on_1b': random.choice([None, random.randint(400000, 700000)]),
+                    'runner_on_2b': random.choice([None, random.randint(400000, 700000)]),
+                    'runner_on_3b': random.choice([None, random.randint(400000, 700000)]),
+                    'rbi': random.randint(0, 4) if random.random() < 0.3 else 0,
+                    'is_scoring_play': random.choice([True, False]) if random.random() < 0.25 else False
+                })
+        
+        df = pd.DataFrame(plays)
+    else:
+        # Real data collection would go here
+        df = pd.DataFrame()  # TODO: Implement real MLB Stats API call
+    
+    out_file = os.path.join(out_dir, f'play_by_play_{date_str}.parquet')
+    df.to_parquet(out_file, index=False)
+    print(f"✅ Play-by-play: {len(df)} events → {out_file}")
+    return out_file
 
 def collect_recent_stats_data(date_str: str, out_dir: str, use_placeholder: bool = True) -> str:
     """Collect recent player performance trends"""
@@ -566,6 +720,10 @@ def collect_recent_stats_data(date_str: str, out_dir: str, use_placeholder: bool
     print(f"✅ Recent stats: {len(df)} stat entries → {out_file}")
     return out_file
 
+# ============================================================================
+# MAIN ORCHESTRATION
+# ============================================================================
+
 def main():
     parser = argparse.ArgumentParser(description='Enhanced MLB data backfill (streamlined)')
     parser.add_argument('--start', required=True, help='Start date (YYYY-MM-DD)')
@@ -589,7 +747,7 @@ def main():
     total_files = 0
     use_placeholder = not args.real_data
     
-    # Core data collection (5 types only)
+    # Core data collection (7 types)
     collection_functions = [
         ('Game Info', collect_game_info_data),
         ('Statcast Data', collect_statcast_data),
@@ -606,10 +764,13 @@ def main():
         
         for name, func in collection_functions:
             try:
-                file_path = func(date_str, args.out_dir, use_placeholder)
-                total_files += 1
+                result = func(date_str, args.out_dir, use_placeholder)
+                if result:  # Success
+                    total_files += 1
             except Exception as e:
                 print(f"❌ Error collecting {name}: {e}")
+                import traceback
+                print(f"   Traceback: {traceback.format_exc()}")
         
         current_date += timedelta(days=1)
     

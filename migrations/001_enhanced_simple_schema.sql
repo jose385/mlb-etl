@@ -1,70 +1,12 @@
 -- migrations/001_enhanced_simple_schema.sql
--- Enhanced consolidated schema for comprehensive MLB betting analysis
--- 9 tables optimized for betting decisions while staying streamlined
--- UPDATED: Made idempotent with proper DROP statements
+-- UPDATED: Streamlined 7-table schema - removed weather & venue_factors (Claude handles these)
+-- Focused on core data Claude needs but cannot get himself
 
 CREATE SCHEMA IF NOT EXISTS public;
 
 -- =============================================================================
--- GAMES TABLE (Simplified Statcast Data)
--- Core game data with essential columns for betting analysis
--- =============================================================================
-DROP TABLE IF EXISTS public.games CASCADE;
-CREATE TABLE public.games (
-  -- Core identifiers
-  game_date               DATE              NOT NULL,
-  game_pk                 BIGINT            NOT NULL,
-  at_bat_number           INTEGER           NOT NULL,
-  pitch_number            SMALLINT          NOT NULL,
-  
-  -- Essential player info
-  pitcher                 INTEGER           NOT NULL,
-  batter                  INTEGER           NOT NULL,
-  stand                   CHAR(1),          -- L/R batter
-  p_throws                CHAR(1),          -- L/R pitcher
-  
-  -- Game situation (betting context)
-  balls                   SMALLINT          NOT NULL,
-  strikes                 SMALLINT          NOT NULL,
-  outs_when_up           SMALLINT,
-  inning                 SMALLINT,
-  inning_topbot          VARCHAR(3),
-  
-  -- Teams
-  home_team               CHAR(3),
-  away_team               CHAR(3),
-  
-  -- Essential pitch data
-  release_speed           REAL,
-  
-  -- Key location data
-  plate_x                 REAL,
-  plate_z                 REAL,
-  zone                    INTEGER,
-  
-  -- Outcome data (critical for analysis)
-  events                  TEXT,
-  description             TEXT,
-  
-  -- Hit data when relevant
-  launch_speed            REAL,
-  launch_angle            REAL,
-  hit_distance_sc         REAL,
-  
-  -- Essential metrics
-  woba_value              REAL,
-  delta_run_exp           REAL,
-  
-  -- Pitch classification
-  pitch_type              CHAR(2),
-  
-  PRIMARY KEY (game_pk, at_bat_number, pitch_number)
-);
-
--- =============================================================================
 -- GAME_INFO TABLE (Enhanced Game Results & Context)
 -- Clean game results with starting pitchers and context - CRITICAL for betting
--- MOVED BEFORE OTHER TABLES FOR FOREIGN KEY REFERENCES
 -- =============================================================================
 DROP TABLE IF EXISTS public.game_info CASCADE;
 CREATE TABLE public.game_info (
@@ -113,6 +55,77 @@ CREATE TABLE public.game_info (
   
   -- Data quality
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- =============================================================================
+-- GAMES TABLE (ENHANCED Statcast Data with ALL Advanced Metrics)
+-- Now includes ALL advanced metrics Claude needs for sophisticated analysis
+-- =============================================================================
+DROP TABLE IF EXISTS public.games CASCADE;
+CREATE TABLE public.games (
+  -- Core identifiers
+  game_date               DATE              NOT NULL,
+  game_pk                 BIGINT            NOT NULL,
+  at_bat_number           INTEGER           NOT NULL,
+  pitch_number            SMALLINT          NOT NULL,
+  
+  -- Essential player info
+  pitcher                 INTEGER           NOT NULL,
+  batter                  INTEGER           NOT NULL,
+  stand                   CHAR(1),          -- L/R batter
+  p_throws                CHAR(1),          -- L/R pitcher
+  
+  -- Game situation (betting context)
+  balls                   SMALLINT          NOT NULL,
+  strikes                 SMALLINT          NOT NULL,
+  outs_when_up           SMALLINT,
+  inning                 SMALLINT,
+  inning_topbot          VARCHAR(3),
+  
+  -- Teams
+  home_team               CHAR(3),
+  away_team               CHAR(3),
+  
+  -- ENHANCED: Core pitch data
+  release_speed           REAL,
+  effective_speed         REAL,             -- NEW: Perceived velocity
+  release_spin_rate       REAL,             -- NEW: Spin rate (RPM)
+  release_extension       REAL,             -- NEW: Release point extension
+  
+  -- ENHANCED: Pitch location and movement
+  plate_x                 REAL,
+  plate_z                 REAL,
+  zone                    INTEGER,
+  pfx_x                   REAL,             -- NEW: Horizontal movement
+  pfx_z                   REAL,             -- NEW: Vertical movement
+  
+  -- Outcome data (critical for analysis)
+  events                  TEXT,
+  description             TEXT,
+  
+  -- ENHANCED: Hit data with advanced metrics
+  launch_speed            REAL,
+  launch_angle            REAL,
+  hit_distance_sc         REAL,
+  launch_speed_angle      SMALLINT,         -- NEW: Barrel classification (1-8)
+  hc_x                    REAL,             -- NEW: Hit coordinate X
+  hc_y                    REAL,             -- NEW: Hit coordinate Y
+  
+  -- ENHANCED: Advanced expected stats
+  estimated_ba_using_speedangle  REAL,      -- NEW: Expected Batting Average (xBA)
+  estimated_woba_using_speedangle REAL,     -- NEW: Expected wOBA (xwOBA)
+  estimated_slg_using_speedangle  REAL,     -- NEW: Expected Slugging (xSLG)
+  woba_value              REAL,
+  babip_value             REAL,             -- NEW: BABIP for this play
+  iso_value               REAL,             -- NEW: Isolated Power value
+  
+  -- Run expectancy
+  delta_run_exp           REAL,
+  
+  -- Pitch classification
+  pitch_type              CHAR(2),
+  
+  PRIMARY KEY (game_pk, at_bat_number, pitch_number)
 );
 
 -- =============================================================================
@@ -168,44 +181,6 @@ CREATE TABLE public.play_by_play (
   risp             BOOLEAN GENERATED ALWAYS AS (runner_on_2b IS NOT NULL OR runner_on_3b IS NOT NULL) STORED,
   
   PRIMARY KEY (game_pk, at_bat_index, event_index)
-);
-
--- =============================================================================
--- WEATHER TABLE (Critical for Betting)
--- Weather conditions that significantly impact game outcomes
--- =============================================================================
-DROP TABLE IF EXISTS public.weather CASCADE;
-CREATE TABLE public.weather (
-  -- Game identifiers
-  game_date DATE NOT NULL,
-  game_pk INTEGER NOT NULL,
-  venue_name TEXT,
-  home_team TEXT,
-  away_team TEXT,
-  
-  -- Essential weather for betting
-  temperature_f REAL,
-  humidity_pct INTEGER,
-  wind_speed_mph REAL,
-  wind_direction_deg INTEGER,
-  
-  -- Calculated impact factors
-  wind_x_component REAL,              -- Helps/hurts home runs
-  wind_y_component REAL,              -- Helps/hurts home runs
-  hr_distance_factor_ft REAL,         -- Estimated HR distance change
-  
-  -- Betting impact scores (0-100)
-  over_under_lean TEXT,               -- "OVER", "UNDER", "NEUTRAL"
-  weather_impact_score REAL,          -- Strength of impact
-  
-  -- Park-specific adjustments
-  park_factor REAL DEFAULT 1.0,      -- Ballpark run factor
-  
-  -- Data tracking
-  data_source TEXT DEFAULT 'openweather',
-  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  
-  PRIMARY KEY (game_pk)
 );
 
 -- =============================================================================
@@ -378,69 +353,10 @@ CREATE TABLE public.recent_stats (
 );
 
 -- =============================================================================
--- VENUE_FACTORS TABLE (Enhanced Ballpark Information)
--- Comprehensive park factors beyond weather - essential for accurate totals
--- =============================================================================
-DROP TABLE IF EXISTS public.venue_factors CASCADE;
-CREATE TABLE public.venue_factors (
-  -- Core identification
-  venue_name TEXT PRIMARY KEY,
-  home_team TEXT NOT NULL,
-  city TEXT,
-  state TEXT,
-  
-  -- Physical characteristics affecting ball flight
-  elevation_feet INTEGER,
-  foul_territory_rank INTEGER, -- 1-30 ranking (1 = most foul territory)
-  
-  -- Wall dimensions (affects home runs)
-  wall_height_lf INTEGER,
-  wall_height_cf INTEGER,
-  wall_height_rf INTEGER,
-  distance_lf_foul INTEGER,
-  distance_cf INTEGER,
-  distance_rf_foul INTEGER,
-  
-  -- Calculated performance factors (historical data)
-  hr_factor REAL DEFAULT 1.0, -- Park factor for home runs (1.0 = neutral)
-  run_factor REAL DEFAULT 1.0, -- Overall run scoring factor
-  double_factor REAL DEFAULT 1.0, -- Park factor for doubles
-  
-  -- Pitcher/hitter friendliness
-  pitcher_friendly_score INTEGER, -- 1-10 scale (10 = most pitcher friendly)
-  left_handed_hitter_advantage REAL, -- Factor for lefty hitters
-  right_handed_hitter_advantage REAL, -- Factor for righty hitters
-  
-  -- Environmental factors
-  dome_stadium BOOLEAN DEFAULT FALSE,
-  retractable_roof BOOLEAN DEFAULT FALSE,
-  artificial_turf BOOLEAN DEFAULT FALSE,
-  
-  -- Special characteristics affecting play
-  wind_patterns TEXT, -- 'Swirling', 'Consistent', 'Variable'
-  sun_field_advantage TEXT, -- Which dugout has sun advantage
-  crowd_noise_factor INTEGER, -- 1-10 scale for crowd impact
-  
-  -- Betting-specific factors
-  over_under_tendency REAL, -- Historical percentage of games going OVER
-  favorite_covering_rate REAL, -- How often home team covers spread
-  average_game_length_minutes INTEGER,
-  
-  -- Special conditions
-  altitude_affects_ball_flight BOOLEAN GENERATED ALWAYS AS (elevation_feet > 3000) STORED,
-  extreme_foul_territory BOOLEAN GENERATED ALWAYS AS (foul_territory_rank <= 5) STORED,
-  short_porch BOOLEAN, -- Any wall distance < 310 feet
-  
-  -- Data tracking
-  last_updated DATE,
-  season_year INTEGER -- Factors can change year to year
-);
-
--- =============================================================================
 -- INDEXES FOR PERFORMANCE
 -- =============================================================================
 
--- Games table indexes
+-- Games table indexes (ENHANCED for advanced metrics)
 DROP INDEX IF EXISTS idx_games_date;
 CREATE INDEX idx_games_date ON public.games(game_date);
 
@@ -450,11 +366,21 @@ CREATE INDEX idx_games_pk ON public.games(game_pk);
 DROP INDEX IF EXISTS idx_games_pitcher;
 CREATE INDEX idx_games_pitcher ON public.games(pitcher);
 
-DROP INDEX IF EXISTS idx_games_teams;
-CREATE INDEX idx_games_teams ON public.games(home_team, away_team);
+DROP INDEX IF EXISTS idx_games_batter;
+CREATE INDEX idx_games_batter ON public.games(batter);
 
 DROP INDEX IF EXISTS idx_games_events;
 CREATE INDEX idx_games_events ON public.games(events);
+
+-- NEW: Advanced metrics indexes
+DROP INDEX IF EXISTS idx_games_xba;
+CREATE INDEX idx_games_xba ON public.games(estimated_ba_using_speedangle);
+
+DROP INDEX IF EXISTS idx_games_barrels;
+CREATE INDEX idx_games_barrels ON public.games(launch_speed_angle) WHERE launch_speed_angle = 6;
+
+DROP INDEX IF EXISTS idx_games_spin_rate;
+CREATE INDEX idx_games_spin_rate ON public.games(release_spin_rate);
 
 -- Play-by-play indexes
 DROP INDEX IF EXISTS idx_playlog_date;
@@ -462,22 +388,6 @@ CREATE INDEX idx_playlog_date ON public.play_by_play(game_date);
 
 DROP INDEX IF EXISTS idx_playlog_pk;
 CREATE INDEX idx_playlog_pk ON public.play_by_play(game_pk);
-
-DROP INDEX IF EXISTS idx_playlog_late_inning;
-CREATE INDEX idx_playlog_late_inning ON public.play_by_play(late_inning);
-
-DROP INDEX IF EXISTS idx_playlog_close_game;
-CREATE INDEX idx_playlog_close_game ON public.play_by_play(close_game);
-
--- Weather indexes
-DROP INDEX IF EXISTS idx_weather_date;
-CREATE INDEX idx_weather_date ON public.weather(game_date);
-
-DROP INDEX IF EXISTS idx_weather_impact;
-CREATE INDEX idx_weather_impact ON public.weather(weather_impact_score);
-
-DROP INDEX IF EXISTS idx_weather_temperature;
-CREATE INDEX idx_weather_temperature ON public.weather(temperature_f);
 
 -- Umpire indexes (focus on home plate)
 DROP INDEX IF EXISTS idx_umpires_date;
@@ -489,47 +399,12 @@ CREATE INDEX idx_umpires_home_plate ON public.umpires(position) WHERE position =
 DROP INDEX IF EXISTS idx_umpires_over_under;
 CREATE INDEX idx_umpires_over_under ON public.umpires(over_under_record);
 
-DROP INDEX IF EXISTS idx_umpires_name;
-CREATE INDEX idx_umpires_name ON public.umpires(umpire_name);
-
 -- Lineup indexes
 DROP INDEX IF EXISTS idx_lineups_date;
 CREATE INDEX idx_lineups_date ON public.lineups(game_date);
 
 DROP INDEX IF EXISTS idx_lineups_pk;
 CREATE INDEX idx_lineups_pk ON public.lineups(game_pk);
-
-DROP INDEX IF EXISTS idx_lineups_order;
-CREATE INDEX idx_lineups_order ON public.lineups(batting_order);
-
-DROP INDEX IF EXISTS idx_lineups_power;
-CREATE INDEX idx_lineups_power ON public.lineups(is_power_hitter);
-
--- Roster indexes
-DROP INDEX IF EXISTS idx_rosters_date;
-CREATE INDEX idx_rosters_date ON public.rosters(game_date);
-
-DROP INDEX IF EXISTS idx_rosters_team;
-CREATE INDEX idx_rosters_team ON public.rosters(team_id);
-
-DROP INDEX IF EXISTS idx_rosters_person;
-CREATE INDEX idx_rosters_person ON public.rosters(person_id);
-
--- Game_info indexes
-DROP INDEX IF EXISTS idx_game_info_date;
-CREATE INDEX idx_game_info_date ON public.game_info(game_date);
-
-DROP INDEX IF EXISTS idx_game_info_teams;
-CREATE INDEX idx_game_info_teams ON public.game_info(home_team, away_team);
-
-DROP INDEX IF EXISTS idx_game_info_starters;
-CREATE INDEX idx_game_info_starters ON public.game_info(home_starting_pitcher, away_starting_pitcher);
-
-DROP INDEX IF EXISTS idx_game_info_venue;
-CREATE INDEX idx_game_info_venue ON public.game_info(venue_name);
-
-DROP INDEX IF EXISTS idx_game_info_status;
-CREATE INDEX idx_game_info_status ON public.game_info(game_status);
 
 -- Recent_stats indexes
 DROP INDEX IF EXISTS idx_recent_stats_player_date;
@@ -538,66 +413,24 @@ CREATE INDEX idx_recent_stats_player_date ON public.recent_stats(player_id, stat
 DROP INDEX IF EXISTS idx_recent_stats_type;
 CREATE INDEX idx_recent_stats_type ON public.recent_stats(stat_type);
 
-DROP INDEX IF EXISTS idx_recent_stats_hot_streak;
-CREATE INDEX idx_recent_stats_hot_streak ON public.recent_stats(hot_streak) WHERE hot_streak = TRUE;
+-- Game_info indexes
+DROP INDEX IF EXISTS idx_game_info_date;
+CREATE INDEX idx_game_info_date ON public.game_info(game_date);
 
-DROP INDEX IF EXISTS idx_recent_stats_cold_streak;
-CREATE INDEX idx_recent_stats_cold_streak ON public.recent_stats(cold_streak) WHERE cold_streak = TRUE;
-
-DROP INDEX IF EXISTS idx_recent_stats_batting;
-CREATE INDEX idx_recent_stats_batting ON public.recent_stats(stat_type, ops) WHERE stat_type LIKE 'batting%';
-
-DROP INDEX IF EXISTS idx_recent_stats_pitching;
-CREATE INDEX idx_recent_stats_pitching ON public.recent_stats(stat_type, era) WHERE stat_type LIKE 'pitching%';
-
--- Venue_factors indexes
-DROP INDEX IF EXISTS idx_venue_factors_team;
-CREATE INDEX idx_venue_factors_team ON public.venue_factors(home_team);
-
-DROP INDEX IF EXISTS idx_venue_factors_run_factor;
-CREATE INDEX idx_venue_factors_run_factor ON public.venue_factors(run_factor);
-
-DROP INDEX IF EXISTS idx_venue_factors_hr_factor;
-CREATE INDEX idx_venue_factors_hr_factor ON public.venue_factors(hr_factor);
-
-DROP INDEX IF EXISTS idx_venue_factors_pitcher_friendly;
-CREATE INDEX idx_venue_factors_pitcher_friendly ON public.venue_factors(pitcher_friendly_score);
-
--- Enhanced composite indexes for betting queries
-DROP INDEX IF EXISTS idx_betting_starters_recent;
-CREATE INDEX idx_betting_starters_recent ON public.recent_stats(player_id, stat_type, stat_date) 
-  WHERE stat_type IN ('pitching_5starts', 'pitching_15d');
-
-DROP INDEX IF EXISTS idx_betting_hitters_recent;
-CREATE INDEX idx_betting_hitters_recent ON public.recent_stats(player_id, stat_type, ops) 
-  WHERE stat_type IN ('batting_7d', 'batting_15d') AND ops IS NOT NULL;
+DROP INDEX IF EXISTS idx_game_info_teams;
+CREATE INDEX idx_game_info_teams ON public.game_info(home_team, away_team);
 
 -- =============================================================================
 -- COMMENTS FOR DOCUMENTATION
 -- =============================================================================
-COMMENT ON TABLE public.games IS 'Simplified Statcast data focusing on essential betting factors';
-COMMENT ON TABLE public.play_by_play IS 'Game flow and situational context for betting analysis';
-COMMENT ON TABLE public.weather IS 'Weather conditions impacting game outcomes and totals';
-COMMENT ON TABLE public.umpires IS 'Umpire tendencies affecting strike zones and game totals';
-COMMENT ON TABLE public.lineups IS 'Starting lineups with key offensive stats';
-COMMENT ON TABLE public.rosters IS 'Basic player identification and characteristics';
-
--- Enhanced table comments
+COMMENT ON TABLE public.games IS 'ENHANCED Statcast data with ALL advanced metrics for sophisticated betting analysis';
 COMMENT ON TABLE public.game_info IS 'Complete game results and context - foundation for all betting analysis';
-COMMENT ON TABLE public.recent_stats IS 'Pre-calculated recent performance trends to eliminate complex on-the-fly calculations';
-COMMENT ON TABLE public.venue_factors IS 'Comprehensive ballpark factors affecting game outcomes and betting totals';
+COMMENT ON TABLE public.recent_stats IS 'Pre-calculated recent performance trends';
 
--- Enhanced column comments
-COMMENT ON COLUMN public.weather.over_under_lean IS 'Weather-based OVER/UNDER recommendation';
-COMMENT ON COLUMN public.umpires.over_under_record IS 'Historical percentage of OVER outcomes with this umpire';
-COMMENT ON COLUMN public.lineups.is_power_hitter IS 'Player with OPS > 0.800 (home run threat)';
-COMMENT ON COLUMN public.play_by_play.late_inning IS 'Inning 7+ (clutch situations)';
-COMMENT ON COLUMN public.play_by_play.close_game IS 'Score difference <= 2 runs';
-COMMENT ON COLUMN public.play_by_play.risp IS 'Runner in scoring position (2nd or 3rd base)';
-
--- New table column comments
-COMMENT ON COLUMN public.game_info.home_starting_pitcher IS 'Starting pitcher ID - drives most betting line movement';
-COMMENT ON COLUMN public.recent_stats.hot_streak IS 'Player performing significantly above season average';
-COMMENT ON COLUMN public.recent_stats.workload_score IS 'Fatigue risk score 0-100 (100 = highest risk)';
-COMMENT ON COLUMN public.venue_factors.run_factor IS 'Park run factor vs league average (1.0 = neutral, >1.0 = hitter friendly)';
-COMMENT ON COLUMN public.venue_factors.over_under_tendency IS 'Historical percentage of games at this venue going OVER the total';
+-- Enhanced column comments for new metrics
+COMMENT ON COLUMN public.games.estimated_ba_using_speedangle IS 'Expected Batting Average based on launch speed and angle';
+COMMENT ON COLUMN public.games.launch_speed_angle IS 'Barrel classification: 6 = barrel, 1-5 = various contact quality';
+COMMENT ON COLUMN public.games.release_spin_rate IS 'Pitch spin rate in RPM - affects movement and effectiveness';
+COMMENT ON COLUMN public.games.effective_speed IS 'Perceived velocity to batter - accounts for release point';
+COMMENT ON COLUMN public.games.pfx_x IS 'Horizontal pitch movement in inches';
+COMMENT ON COLUMN public.games.pfx_z IS 'Vertical pitch movement in inches';

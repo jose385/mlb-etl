@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-enhanced_load_parquet_into_pg.py – FIXED: Enhanced loader with placeholder data support
-MAJOR FIXES: Better error handling, placeholder data validation, improved constraint handling
-Supports loading from local files and S3, works reliably with both placeholder and real data
+enhanced_load_parquet_into_pg.py – STREAMLINED: Loads 7 core tables only
+REMOVED: Weather and venue_factors tables (Claude handles these)
+ENHANCED: Better error handling for advanced Statcast metrics
 
 Usage:
-    python enhanced_load_parquet_into_pg.py [--input-dir DIR] [--tables T1 T2 ...] [--from-s3]
+    python enhanced_load_parquet_into_pg.py [--input-dir DIR] [--tables T1 T2 ...]
 """
 import os
 import argparse
@@ -31,10 +31,8 @@ def fix_nullable_integers(df):
     for col in integer_columns:
         if col in df.columns:
             if df[col].dtype == 'float64':
-                # Convert float64 with NaNs to nullable integers
                 df[col] = df[col].astype('Int64')
             elif df[col].dtype == 'Int64':
-                # Keep as nullable integer, but ensure clean conversion for CSV
                 pass
     
     return df
@@ -65,15 +63,13 @@ def retry_database_operation(max_retries=3, delay=1):
         return wrapper
     return decorator
 
-
-def get_enhanced_table_mapping(file_stem: str) -> str:
+def get_streamlined_table_mapping(file_stem: str) -> str:
     """
-    FIXED: Enhanced table mapping that handles all filename patterns correctly
-    Maps file prefixes to correct table names for the 9-table schema
+    STREAMLINED: Maps file prefixes to 7 core tables only
+    REMOVED: weather and venue_factors mappings
     """
-    # Handle exact filename matches first (for files like "venue_factors.parquet")
+    # Handle exact filename matches first
     exact_matches = {
-        "venue_factors": "venue_factors",
         "recent_stats": "recent_stats",
     }
     
@@ -81,59 +77,49 @@ def get_enhanced_table_mapping(file_stem: str) -> str:
         return exact_matches[file_stem]
     
     # Handle date-suffixed files (like "games_2024-07-15")
-    # Split on first underscore to get the data type
     parts = file_stem.split("_")
     if len(parts) >= 2:
-        # Check if last part looks like a date (YYYY-MM-DD)
         last_part = parts[-1]
         if len(last_part) == 10 and last_part.count('-') == 2:
-            # This is a date-suffixed file, get everything before the date
             base_name = "_".join(parts[:-1])
         else:
-            # Not a date-suffixed file, use first part
             base_name = parts[0]
     else:
-        # Single part filename
         base_name = file_stem
     
-    # FIXED: Enhanced schema table mappings with all possible variations
+    # STREAMLINED: 7-table schema mappings only
     table_mapping = {
-        # Primary mappings (exact matches)
+        # Core 7 tables
         "games": "games",
         "play_by_play": "play_by_play", 
         "game_info": "game_info",
-        "weather": "weather",
         "umpires": "umpires",
         "lineups": "lineups",
         "rosters": "rosters",
         "recent_stats": "recent_stats",
-        "venue_factors": "venue_factors",
         
-        # Alternative patterns that might be created
-        "play": "play_by_play",  # Handle "play_by_play" -> "play" mapping
-        "game": "game_info",     # Handle "game_info" -> "game" mapping
-        "umpire": "umpires",     # Handle singular/plural
-        "lineup": "lineups",     # Handle singular/plural
-        "roster": "rosters",     # Handle singular/plural
+        # Alternative patterns
+        "play": "play_by_play",
+        "game": "game_info",
+        "umpire": "umpires",
+        "lineup": "lineups",
+        "roster": "rosters",
         
-        # FIXED: Handle possible backfill naming variations
-        "statcast_games": "games",     # If backfill names it this way
-        "pbp": "play_by_play",         # Abbreviation
-        "starting_lineups": "lineups", # Alternative naming
-        "player_stats": "recent_stats", # Alternative naming
-        
-        # Legacy support (if old naming is still used somewhere)
-        "statcast": "games",     # Legacy Statcast files -> games table
-        "statsapi": "play_by_play",  # Legacy StatsAPI files -> play_by_play table
+        # Legacy support
+        "statcast_games": "games",
+        "pbp": "play_by_play",
+        "starting_lineups": "lineups",
+        "player_stats": "recent_stats",
+        "statcast": "games",
+        "statsapi": "play_by_play",
     }
     
     if base_name in table_mapping:
         return table_mapping[base_name]
     
-    # FIXED: More intelligent fallback
+    # Intelligent fallback
     print(f"⚠️ Warning: No table mapping found for '{file_stem}', attempting intelligent guess...")
     
-    # Try to guess based on common patterns
     if 'game' in base_name.lower():
         if 'info' in base_name.lower():
             return 'game_info'
@@ -147,52 +133,39 @@ def get_enhanced_table_mapping(file_stem: str) -> str:
         return 'rosters'
     elif 'umpire' in base_name.lower():
         return 'umpires'
-    elif 'weather' in base_name.lower():
-        return 'weather'
-    elif 'venue' in base_name.lower() or 'ballpark' in base_name.lower():
-        return 'venue_factors'
     elif 'stat' in base_name.lower():
         return 'recent_stats'
     
-    # Final fallback: return the base name
+    # Final fallback
     print(f"   Using base name: {base_name}")
     return base_name
 
-
 def get_loading_order_priority(data_type: str) -> int:
     """
-    CRITICAL FIX: Define loading order to respect foreign key dependencies
+    STREAMLINED: Loading order for 7 tables
     Lower numbers = load first
     """
     loading_order = {
         # Load parent tables first (no dependencies)
         'game_info': 1,      # PRIMARY - All other tables reference this
-        'venue_factors': 2,   # INDEPENDENT - No foreign keys
-        'rosters': 3,        # SEMI-INDEPENDENT - Only references dates/teams
+        'rosters': 2,        # INDEPENDENT - Only references dates/teams
         
         # Load child tables second (depend on game_info)
-        'games': 4,          # References game_info.game_pk
-        'play_by_play': 5,   # References game_info.game_pk  
-        'lineups': 6,        # References game_info.game_pk
-        'umpires': 7,        # References game_info.game_pk
-        'weather': 8,        # References game_info.game_pk
-        'recent_stats': 9,   # INDEPENDENT but load last
+        'games': 3,          # References game_info.game_pk
+        'play_by_play': 4,   # References game_info.game_pk  
+        'lineups': 5,        # References game_info.game_pk
+        'umpires': 6,        # References game_info.game_pk
+        'recent_stats': 7,   # INDEPENDENT but load last
     }
     
-    return loading_order.get(data_type, 999)  # Unknown types load last
-
+    return loading_order.get(data_type, 999)
 
 def sort_files_by_dependency_order(files: List[Path]) -> List[Path]:
-    """
-    CRITICAL FIX: Sort files to load in dependency order
-    This prevents foreign key constraint violations
-    """
+    """Sort files to load in dependency order"""
     def get_file_priority(file_path: Path) -> tuple:
         stem = file_path.stem
-        table_name = get_enhanced_table_mapping(stem)
+        table_name = get_streamlined_table_mapping(stem)
         priority = get_loading_order_priority(table_name)
-        
-        # Sort by: (priority, filename) to ensure consistent ordering
         return (priority, stem)
     
     sorted_files = sorted(files, key=get_file_priority)
@@ -200,12 +173,11 @@ def sort_files_by_dependency_order(files: List[Path]) -> List[Path]:
     print(f"📋 Loading order determined:")
     for file in sorted_files:
         stem = file.stem
-        table_name = get_enhanced_table_mapping(stem)
+        table_name = get_streamlined_table_mapping(stem)
         priority = get_loading_order_priority(table_name)
         print(f"   {priority:2d}. {file.name} → {table_name}")
     
     return sorted_files
-
 
 @retry_database_operation(max_retries=3, delay=2)
 def connect():
@@ -226,7 +198,6 @@ def connect():
         print(f"❌ Database connection failed: {e}")
         raise
 
-
 @retry_database_operation(max_retries=2, delay=1)
 def get_table_columns(conn, table: str):
     """Return column names existing in public.<table>"""
@@ -241,15 +212,14 @@ def get_table_columns(conn, table: str):
     cur.execute(sql, (table,))
     return [row[0] for row in cur.fetchall()]
 
-
-def validate_placeholder_data(df: pd.DataFrame, table: str) -> pd.DataFrame:
+def validate_enhanced_statcast_data(df: pd.DataFrame, table: str) -> pd.DataFrame:
     """
-    NEW: Validate and clean placeholder data for reliable loading
+    ENHANCED: Validate and clean advanced Statcast data
+    Handles all the new advanced metrics properly
     """
     if df.empty:
         return df
     
-    # Clean up any problematic values
     df = df.copy()
     
     # Replace any infinite values with None
@@ -258,38 +228,49 @@ def validate_placeholder_data(df: pd.DataFrame, table: str) -> pd.DataFrame:
     # Handle NaN values appropriately
     for col in df.columns:
         if df[col].dtype == 'object':
-            # Replace NaN in string columns with None
             df[col] = df[col].where(pd.notna(df[col]), None)
         elif df[col].dtype in ['float64', 'float32']:
-            # Keep NaN as None for numeric columns
             df[col] = df[col].where(pd.notna(df[col]), None)
     
-    # Table-specific validations
+    # ENHANCED: Table-specific validations for advanced metrics
     if table == 'games':
         # Ensure pitch numbers are positive
         if 'pitch_number' in df.columns:
             df['pitch_number'] = df['pitch_number'].clip(lower=1)
         
-        # Ensure at_bat_number is positive
         if 'at_bat_number' in df.columns:
             df['at_bat_number'] = df['at_bat_number'].clip(lower=1)
+        
+        # ENHANCED: Validate advanced Statcast metrics
+        if 'estimated_ba_using_speedangle' in df.columns:
+            df['estimated_ba_using_speedangle'] = df['estimated_ba_using_speedangle'].clip(lower=0.000, upper=1.000)
+        
+        if 'estimated_woba_using_speedangle' in df.columns:
+            df['estimated_woba_using_speedangle'] = df['estimated_woba_using_speedangle'].clip(lower=0.000, upper=2.000)
+        
+        if 'estimated_slg_using_speedangle' in df.columns:
+            df['estimated_slg_using_speedangle'] = df['estimated_slg_using_speedangle'].clip(lower=0.000, upper=4.000)
+        
+        if 'launch_speed_angle' in df.columns:
+            df['launch_speed_angle'] = df['launch_speed_angle'].clip(lower=1, upper=8)
+        
+        if 'release_spin_rate' in df.columns:
+            df['release_spin_rate'] = df['release_spin_rate'].clip(lower=1000, upper=4000)
+        
+        if 'effective_speed' in df.columns:
+            df['effective_speed'] = df['effective_speed'].clip(lower=50, upper=110)
+        
+        if 'babip_value' in df.columns:
+            df['babip_value'] = df['babip_value'].clip(lower=0.000, upper=1.000)
+        
+        if 'iso_value' in df.columns:
+            df['iso_value'] = df['iso_value'].clip(lower=0.000, upper=2.000)
     
     elif table == 'game_info':
         # Ensure scores are non-negative
         for score_col in ['home_score', 'away_score']:
             if score_col in df.columns:
                 df[score_col] = df[score_col].clip(lower=0)
-    
-    elif table == 'weather':
-        # Ensure reasonable weather values
-        if 'temperature_f' in df.columns:
-            df['temperature_f'] = df['temperature_f'].clip(lower=-20, upper=120)
-        
-        if 'wind_speed_mph' in df.columns:
-            df['wind_speed_mph'] = df['wind_speed_mph'].clip(lower=0, upper=100)
-        
-        if 'humidity_pct' in df.columns:
-            df['humidity_pct'] = df['humidity_pct'].clip(lower=0, upper=100)
     
     elif table == 'recent_stats':
         # Ensure reasonable stat values
@@ -304,10 +285,9 @@ def validate_placeholder_data(df: pd.DataFrame, table: str) -> pd.DataFrame:
     
     return df
 
-
 @retry_database_operation(max_retries=2, delay=1)
 def load_table(conn, table: str, df: pd.DataFrame):
-    """FIXED: Load data into table with enhanced error handling and placeholder data support"""
+    """STREAMLINED: Load data into streamlined 7-table schema"""
     if df.empty:
         print(f"⏭️ Skipping {table} - DataFrame is empty")
         return
@@ -343,66 +323,70 @@ def load_table(conn, table: str, df: pd.DataFrame):
     # Prepare data for loading
     df_to_load = df[to_load].copy()
     
-    # NEW: Validate placeholder data
-    df_to_load = validate_placeholder_data(df_to_load, table)
+    # ENHANCED: Validate advanced Statcast data
+    df_to_load = validate_enhanced_statcast_data(df_to_load, table)
     
-    # FIXED: Enhanced data type conversions for PostgreSQL compatibility
+    # Enhanced data type conversions for PostgreSQL compatibility
     for col in df_to_load.columns:
-        # Handle missing values
         if df_to_load[col].isnull().all():
             continue
             
         # Convert boolean-like values
         if df_to_load[col].dtype == 'object':
-            # Handle common boolean representations
             bool_map = {'true': True, 'false': False, 'True': True, 'False': False,
                        'yes': True, 'no': False, 'Y': True, 'N': False}
             bool_mask = df_to_load[col].isin(bool_map.keys())
             if bool_mask.any():
                 df_to_load[col] = df_to_load[col].map(bool_map).fillna(df_to_load[col])
         
-         # Handle nullable integer columns
+        # Handle nullable integer columns
         if str(df_to_load[col].dtype).startswith('Int'):
-            # FIXED: Keep nullable integers as-is for proper CSV conversion
             pass
         
-        # FIXED: Handle date columns properly
+        # Handle date columns properly
         if col.endswith('_date') or 'date' in col.lower():
             try:
                 if df_to_load[col].dtype == 'object':
                     df_to_load[col] = pd.to_datetime(df_to_load[col], errors='coerce').dt.date
             except:
-                pass  # Keep original if conversion fails
+                pass
         
-        # FIXED: Handle numeric columns with proper null handling
+        # Handle numeric columns with proper null handling
         if col in ['game_pk', 'person_id', 'pitcher', 'batter', 'team_id']:
             try:
                 df_to_load[col] = pd.to_numeric(df_to_load[col], errors='coerce')
             except:
                 pass
         
-        # NEW: Handle specific column types for placeholder data
-        if col in ['temperature_f', 'wind_speed_mph', 'era', 'batting_avg', 'ops']:
+        # ENHANCED: Handle advanced Statcast metrics
+        advanced_metrics = [
+            'estimated_ba_using_speedangle', 'estimated_woba_using_speedangle',
+            'estimated_slg_using_speedangle', 'release_spin_rate', 'effective_speed',
+            'babip_value', 'iso_value', 'pfx_x', 'pfx_z', 'hc_x', 'hc_y'
+        ]
+        if col in advanced_metrics:
             try:
                 df_to_load[col] = pd.to_numeric(df_to_load[col], errors='coerce')
                 # Round to reasonable precision
-                if col in ['era', 'batting_avg', 'ops']:
+                if col in ['estimated_ba_using_speedangle', 'estimated_woba_using_speedangle', 'babip_value']:
                     df_to_load[col] = df_to_load[col].round(3)
-                else:
+                elif col in ['pfx_x', 'pfx_z', 'hc_x', 'hc_y']:
                     df_to_load[col] = df_to_load[col].round(1)
+                else:
+                    df_to_load[col] = df_to_load[col].round(2)
             except:
                 pass
     
-    # FIXED: Clean up any infinite values
+    # Clean up any infinite values
     df_to_load = df_to_load.replace([float('inf'), float('-inf')], None)
     
     # Create CSV buffer
     buf = io.StringIO()
-    df_to_load.to_csv(buf, index=False, header=False, na_rep='\\N')  # Use PostgreSQL NULL representation
+    df_to_load.to_csv(buf, index=False, header=False, na_rep='\\N')
     buf.seek(0)
     
     cols_csv = ", ".join(to_load)
-    temp_table = f"temp_{table}_{int(time.time())}_{os.getpid()}"  # Make unique
+    temp_table = f"temp_{table}_{int(time.time())}_{os.getpid()}"
     copy_sql = f"COPY {temp_table} ({cols_csv}) FROM STDIN WITH (FORMAT CSV, NULL '\\N')"
     
     cur = conn.cursor()
@@ -416,7 +400,7 @@ def load_table(conn, table: str, df: pd.DataFrame):
         cur.copy_expert(copy_sql, buf)
         temp_rows = cur.rowcount
         
-        # FIXED: Enhanced conflict resolution based on table type
+        # STREAMLINED: Conflict resolution for 7 tables
         if table == "game_info":
             # Primary key: game_pk
             insert_sql = f"""
@@ -424,14 +408,6 @@ def load_table(conn, table: str, df: pd.DataFrame):
                 SELECT {cols_csv} FROM {temp_table}
                 ON CONFLICT (game_pk) DO UPDATE SET
                 {', '.join([f"{col} = EXCLUDED.{col}" for col in to_load if col != 'game_pk'])}
-            """
-        elif table == "venue_factors":
-            # Primary key: venue_name
-            insert_sql = f"""
-                INSERT INTO public.{table} ({cols_csv})
-                SELECT {cols_csv} FROM {temp_table}
-                ON CONFLICT (venue_name) DO UPDATE SET
-                {', '.join([f"{col} = EXCLUDED.{col}" for col in to_load if col != 'venue_name'])}
             """
         elif table == "recent_stats":
             # Composite primary key: stat_date, player_id, stat_type
@@ -460,7 +436,6 @@ def load_table(conn, table: str, df: pd.DataFrame):
                     ON CONFLICT (game_pk, at_bat_number, pitch_number) DO NOTHING
                 """
             else:
-                # Fallback for incomplete primary key
                 insert_sql = f"""
                     INSERT INTO public.{table} ({cols_csv})
                     SELECT {cols_csv} FROM {temp_table}
@@ -475,7 +450,6 @@ def load_table(conn, table: str, df: pd.DataFrame):
                     ON CONFLICT (game_pk, at_bat_index, event_index) DO NOTHING
                 """
             else:
-                # Fallback for incomplete primary key
                 insert_sql = f"""
                     INSERT INTO public.{table} ({cols_csv})
                     SELECT {cols_csv} FROM {temp_table}
@@ -490,7 +464,6 @@ def load_table(conn, table: str, df: pd.DataFrame):
                     ON CONFLICT (game_pk, team_id, batting_order) DO NOTHING
                 """
             else:
-                # Fallback for incomplete primary key
                 insert_sql = f"""
                     INSERT INTO public.{table} ({cols_csv})
                     SELECT {cols_csv} FROM {temp_table}
@@ -505,7 +478,6 @@ def load_table(conn, table: str, df: pd.DataFrame):
                     ON CONFLICT (game_date, team_id, person_id) DO NOTHING
                 """
             else:
-                # Fallback for incomplete primary key
                 insert_sql = f"""
                     INSERT INTO public.{table} ({cols_csv})
                     SELECT {cols_csv} FROM {temp_table}
@@ -520,7 +492,6 @@ def load_table(conn, table: str, df: pd.DataFrame):
                     ON CONFLICT (game_pk, umpire_id) DO NOTHING
                 """
             else:
-                # Fallback for incomplete primary key
                 insert_sql = f"""
                     INSERT INTO public.{table} ({cols_csv})
                     SELECT {cols_csv} FROM {temp_table}
@@ -552,13 +523,9 @@ def load_table(conn, table: str, df: pd.DataFrame):
             pass
         raise
 
-
 @retry_database_operation(max_retries=2, delay=1)
 def load_all_files_in_transaction(conn, files_and_tables: List[tuple]):
-    """
-    CRITICAL FIX: Load all files in a single transaction with deferred constraints
-    This allows foreign keys to be checked only at commit time
-    """
+    """Load all files in a single transaction with deferred constraints"""
     cur = conn.cursor()
     
     try:
@@ -573,7 +540,7 @@ def load_all_files_in_transaction(conn, files_and_tables: List[tuple]):
             print(f"\n⏳ Loading {file_path.name} → {table_name}")
             
             try:
-                # FIXED: Better parquet file handling
+                # Read parquet file
                 df = pd.read_parquet(file_path)
                 integer_columns = ['runner_on_1b', 'runner_on_2b', 'runner_on_3b', 'person_id', 'team_id', 'umpire_id', 'game_pk']
                 for col in integer_columns:
@@ -583,12 +550,11 @@ def load_all_files_in_transaction(conn, files_and_tables: List[tuple]):
                 
                 if df.empty:
                     print(f"   ⏭️ Skipping empty file: {file_path.name}")
-                    successful_loads += 1  # Count as success
+                    successful_loads += 1
                     continue
                 
-                # FIXED: Data validation before loading
+                # Data validation before loading
                 if 'game_pk' in df.columns:
-                    # Remove rows with null game_pk
                     before_count = len(df)
                     df = df.dropna(subset=['game_pk'])
                     after_count = len(df)
@@ -603,10 +569,9 @@ def load_all_files_in_transaction(conn, files_and_tables: List[tuple]):
                 
             except Exception as e:
                 print(f"   ❌ Failed to load {file_path.name}: {e}")
-                # Continue with other files instead of failing entire transaction
                 continue
         
-        # Commit transaction - this is when foreign key constraints are checked
+        # Commit transaction
         print(f"\n🔄 Committing transaction with {successful_loads} successful loads...")
         cur.execute("COMMIT")
         
@@ -625,12 +590,11 @@ def load_all_files_in_transaction(conn, files_and_tables: List[tuple]):
             pass
         raise
 
-
-def validate_enhanced_schema(conn):
-    """FIXED: Validate that enhanced schema tables exist"""
+def validate_streamlined_schema(conn):
+    """Validate that streamlined 7-table schema exists"""
     expected_tables = [
-        "games", "play_by_play", "weather", "umpires", 
-        "lineups", "rosters", "game_info", "recent_stats", "venue_factors"
+        "games", "play_by_play", "umpires", 
+        "lineups", "rosters", "game_info", "recent_stats"
     ]
     
     cur = conn.cursor()
@@ -645,13 +609,13 @@ def validate_enhanced_schema(conn):
     missing_tables = set(expected_tables) - existing_tables
     
     if missing_tables:
-        print(f"⚠️  Missing enhanced schema tables: {sorted(missing_tables)}")
+        print(f"⚠️  Missing streamlined schema tables: {sorted(missing_tables)}")
         print(f"   Run: python initialize_database.py")
         return False
     
-    print(f"✅ Enhanced schema validated: {len(expected_tables)} tables found")
+    print(f"✅ Streamlined schema validated: {len(expected_tables)} tables found")
     
-    # FIXED: Also check for data in key tables
+    # Check for data in key tables
     data_check_tables = ["game_info", "games", "play_by_play"]
     for table in data_check_tables:
         if table in existing_tables:
@@ -661,45 +625,9 @@ def validate_enhanced_schema(conn):
     
     return True
 
-
-def load_from_s3_if_available(input_dir: Path, s3_manager=None) -> List[Path]:
-    """Load parquet files from S3 if available, otherwise use local files"""
-    local_files = list(input_dir.glob("*.parquet"))
-    
-    if not s3_manager:
-        return local_files
-    
-    print("🌐 Checking S3 for additional parquet files...")
-    s3_files = s3_manager.list_parquet_files()
-    
-    downloaded_count = 0
-    for s3_key in s3_files:
-        filename = Path(s3_key).name
-        local_file = input_dir / filename
-        
-        if not local_file.exists():
-            print(f"📥 Downloading {filename} from S3...")
-            if s3_manager.download_parquet(s3_key, local_file):
-                downloaded_count += 1
-    
-    if downloaded_count > 0:
-        print(f"📥 Downloaded {downloaded_count} files from S3")
-    
-    return list(input_dir.glob("*.parquet"))
-
-
-def upload_results_to_s3(input_dir: Path, s3_manager=None) -> int:
-    """Upload any remaining local files to S3"""
-    if not s3_manager:
-        return 0
-    
-    print("📤 Uploading local files to S3...")
-    return s3_manager.upload_directory(input_dir)
-
-
-def show_loading_summary(files, successful_loads, failed_loads, total_rows_loaded, s3_enabled=False):
-    """FIXED: Enhanced loading summary with better information"""
-    print(f"\n🎉 Enhanced loading complete!")
+def show_loading_summary(files, successful_loads, failed_loads, total_rows_loaded):
+    """Enhanced loading summary with streamlined info"""
+    print(f"\n🎉 Streamlined loading complete!")
     print(f"📊 Summary:")
     print(f"   📁 Files processed: {len(files)}")
     print(f"   ✅ Successful loads: {successful_loads}")
@@ -709,29 +637,22 @@ def show_loading_summary(files, successful_loads, failed_loads, total_rows_loade
     success_rate = (successful_loads / len(files)) * 100 if files else 0
     print(f"   📊 Success rate: {success_rate:.1f}%")
     
-    if s3_enabled:
-        print(f"   ☁️ S3 integration: enabled")
-    
     if failed_loads > 0:
         print(f"\n⚠️  {failed_loads} files failed to load. Check error messages above.")
-        print(f"💡 Common issues:")
-        print(f"   • Missing columns: File structure doesn't match database schema")
-        print(f"   • Data type errors: Invalid data formats")
-        print(f"   • Foreign key violations: Parent records missing")
     else:
         print(f"\n🎯 All files loaded successfully!")
     
-    print(f"\n💡 Next steps:")
-    print(f"   1. Validate data: SELECT table_name, count(*) FROM information_schema.tables WHERE table_schema='public' GROUP BY table_name;")
-    print(f"   2. Check key tables: SELECT COUNT(*) FROM games; SELECT COUNT(*) FROM game_info;")
-    print(f"   3. Run analysis: python py/simple_analysis.py")
+    print(f"\n✨ STREAMLINED FEATURES:")
+    print(f"   🗑️ Removed weather & venue_factors tables (Claude handles these)")
+    print(f"   📊 7 core tables with enhanced Statcast metrics")
+    print(f"   🚀 Faster loading with reduced complexity")
     
-    if successful_loads > 0:
-        print(f"   4. Test betting analysis with a specific game")
-
+    print(f"\n💡 Next steps:")
+    print(f"   1. Run analysis: python py/simple_analysis.py")
+    print(f"   2. Ask Claude for betting recommendations!")
 
 def main():
-    p = argparse.ArgumentParser(description="FIXED MLB data loader for complete 9-table schema with placeholder data support")
+    p = argparse.ArgumentParser(description="STREAMLINED MLB data loader for 7-table schema with advanced Statcast metrics")
     p.add_argument(
         "--input-dir",
         default="stage",
@@ -740,22 +661,12 @@ def main():
     p.add_argument(
         "--tables",
         nargs="*",
-        help="Optional subset: games play_by_play game_info weather umpires lineups rosters recent_stats venue_factors"
+        help="Optional subset: games play_by_play game_info umpires lineups rosters recent_stats"
     )
     p.add_argument(
         "--validate-schema",
         action="store_true",
-        help="Validate enhanced schema before loading"
-    )
-    p.add_argument(
-        "--from-s3",
-        action="store_true",
-        help="Download files from S3 before loading"
-    )
-    p.add_argument(
-        "--upload-to-s3",
-        action="store_true", 
-        help="Upload local files to S3 after processing"
+        help="Validate streamlined schema before loading"
     )
     p.add_argument(
         "--debug",
@@ -776,11 +687,10 @@ def main():
         
         # Show mode info
         mode = "PLACEHOLDER" if getattr(config, 'USE_PLACEHOLDER_DATA', True) else "REAL"
-        print(f"🔧 Loading {mode} data into database")
+        print(f"🔧 Loading {mode} data into streamlined 7-table schema")
         
     except Exception as e:
         print(f"❌ Configuration error: {e}")
-        print("💡 Run: python setup_env.py")
         return
     
     # Connect to database
@@ -789,61 +699,43 @@ def main():
         print("✅ Connected to database")
     except Exception as e:
         print(f"❌ Failed to connect to database: {e}")
-        print("💡 Check database configuration and ensure database is running")
         return
     
     # Validate schema if requested
     if args.validate_schema:
-        if not validate_enhanced_schema(conn):
+        if not validate_streamlined_schema(conn):
             print("❌ Schema validation failed")
             return
-    
-    # Setup S3 manager if enabled
-    s3_manager = None
-    try:
-        if config.ENABLE_S3_STORAGE and (args.from_s3 or args.upload_to_s3):
-            s3_manager = config.get_s3_manager()
-            if s3_manager:
-                print("✅ S3 integration enabled")
-    except Exception as e:
-        print(f"⚠️ S3 integration not available: {e}")
     
     # Setup input directory
     in_dir = Path(args.input_dir)
     in_dir.mkdir(exist_ok=True)
     
-    # Load files (from S3 if requested)
-    if args.from_s3 and s3_manager:
-        files = load_from_s3_if_available(in_dir, s3_manager)
-    else:
-        files = list(in_dir.glob("*.parquet"))
+    files = list(in_dir.glob("*.parquet"))
     
     if not files:
         print(f"❌ No parquet files found in {in_dir}")
-        if s3_manager:
-            print("💡 Try using --from-s3 to download files from S3")
-        else:
-            print("💡 Make sure backfill has been run first:")
-            print("   python py/enhanced_simple_backfill.py --start YYYY-MM-DD --end YYYY-MM-DD")
+        print("💡 Make sure backfill has been run first:")
+        print("   python py/enhanced_simple_backfill.py --start YYYY-MM-DD --end YYYY-MM-DD")
         return
     
     print(f"📁 Found {len(files)} parquet files in {in_dir}")
     
     # Show what files we found
     for file in files:
-        table_name = get_enhanced_table_mapping(file.stem)
+        table_name = get_streamlined_table_mapping(file.stem)
         print(f"   • {file.name} → {table_name}")
     
     # Filter by tables if specified
     if args.tables:
         keep = set(args.tables)
         
-        def matches_enhanced_schema(f):
+        def matches_streamlined_schema(f):
             stem = f.stem
-            table_name = get_enhanced_table_mapping(stem)
+            table_name = get_streamlined_table_mapping(stem)
             return table_name in keep
         
-        files = [f for f in files if matches_enhanced_schema(f)]
+        files = [f for f in files if matches_streamlined_schema(f)]
         
         if not files:
             print(f"❌ None of the files match requested tables: {keep}")
@@ -851,14 +743,14 @@ def main():
         
         print(f"📋 Filtered to {len(files)} files for requested tables")
     
-    # CRITICAL FIX: Sort files by dependency order
+    # Sort files by dependency order
     files = sort_files_by_dependency_order(files)
     
     # Prepare file-to-table mapping
     files_and_tables = []
     for pq_file in files:
         stem = pq_file.stem
-        table = get_enhanced_table_mapping(stem)
+        table = get_streamlined_table_mapping(stem)
         files_and_tables.append((pq_file, table))
     
     # Show dry run if requested
@@ -869,7 +761,7 @@ def main():
         print(f"\nTo actually load, run without --dry-run")
         return
     
-    # CRITICAL FIX: Load all files in a single transaction with deferred constraints
+    # Load all files in a single transaction
     try:
         successful_loads, total_rows_loaded = load_all_files_in_transaction(conn, files_and_tables)
         failed_loads = len(files) - successful_loads
@@ -878,7 +770,6 @@ def main():
         print(f"\n🔍 Checking for constraint violations...")
         
         with conn.cursor() as cur:
-            # Check if the constraint validation function exists
             cur.execute("""
                 SELECT EXISTS (
                     SELECT 1 FROM pg_proc 
@@ -907,24 +798,11 @@ def main():
         successful_loads = 0
         failed_loads = len(files)
         total_rows_loaded = 0
-        
-        # Show debugging info
-        print(f"\n🔍 Debugging info:")
-        print(f"   Files to load: {len(files)}")
-        for pq_file, table in files_and_tables[:5]:  # Show first 5
-            print(f"   {pq_file.name} → {table}")
-        if len(files_and_tables) > 5:
-            print(f"   ... and {len(files_and_tables) - 5} more")
-    
-    # Upload to S3 if requested
-    if args.upload_to_s3 and s3_manager:
-        upload_results_to_s3(in_dir, s3_manager)
     
     # Show summary
-    show_loading_summary(files, successful_loads, failed_loads, total_rows_loaded, s3_enabled=bool(s3_manager))
+    show_loading_summary(files, successful_loads, failed_loads, total_rows_loaded)
     
     conn.close()
-
 
 if __name__ == "__main__":
     main()

@@ -1,8 +1,7 @@
 """
-Centralized configuration management for MLB ETL pipeline
-Handles all environment variables with validation and defaults
-Enhanced for 9-table betting analysis system with AWS S3 and RDS support
-UPDATED: Flexible configuration with graceful degradation and placeholder mode support
+Streamlined configuration management for MLB ETL pipeline
+REMOVED: Weather and venue factor configuration (Claude handles these)
+ENHANCED: Focused on core data collection and advanced Statcast metrics
 """
 import os
 import sys
@@ -14,7 +13,7 @@ class ConfigError(Exception):
     pass
 
 class Config:
-    """Centralized configuration management with validation and placeholder mode support"""
+    """Streamlined configuration management focused on core data collection"""
     
     def __init__(self):
         self._validated = False
@@ -26,8 +25,7 @@ class Config:
         # Database Configuration (REQUIRED)
         self.PG_DSN = os.getenv("PG_DSN", "")
         
-        # API Keys (CONDITIONAL)
-        self.OPENWEATHER_API_KEY = os.getenv("OPENWEATHER_API_KEY", "")
+        # API Keys (FOR REAL DATA MODE)
         self.MLB_API_KEY = os.getenv("MLB_API_KEY", "")  # Future use
         
         # AWS Configuration
@@ -38,7 +36,7 @@ class Config:
         self.AUTO_UPLOAD_TO_S3 = self._str_to_bool(os.getenv("AUTO_UPLOAD_TO_S3", "false"))
         self.AUTO_CLEANUP_LOCAL = self._str_to_bool(os.getenv("AUTO_CLEANUP_LOCAL", "false"))
         
-        # PLACEHOLDER MODE (NEW - Key for testing)
+        # PLACEHOLDER MODE (Key for testing)
         self.USE_PLACEHOLDER_DATA = self._str_to_bool(os.getenv("USE_PLACEHOLDER_DATA", "true"))
         self.PLACEHOLDER_GAMES_PER_DAY = int(os.getenv("PLACEHOLDER_GAMES_PER_DAY", "12"))
         
@@ -48,8 +46,7 @@ class Config:
         self.LOG_DIR = os.getenv("LOG_DIR", "logs")
         
         # Enhanced Rate Limiting Settings
-        self.MLB_API_DELAY = float(os.getenv("MLB_API_DELAY", "0.5"))  # Increased for stability
-        self.WEATHER_API_DELAY = float(os.getenv("WEATHER_API_DELAY", "1.0"))  # Increased for stability
+        self.MLB_API_DELAY = float(os.getenv("MLB_API_DELAY", "0.5"))
         self.STATS_API_DELAY = float(os.getenv("STATS_API_DELAY", "0.5"))
         
         # Enhanced Data Quality Thresholds
@@ -61,22 +58,19 @@ class Config:
         # Enhanced Betting Analysis Thresholds
         self.STRONG_EDGE_THRESHOLD = float(os.getenv("STRONG_EDGE_THRESHOLD", "0.12"))
         self.MODERATE_EDGE_THRESHOLD = float(os.getenv("MODERATE_EDGE_THRESHOLD", "0.06"))
-        self.WEATHER_IMPACT_THRESHOLD = float(os.getenv("WEATHER_IMPACT_THRESHOLD", "0.08"))
         
-        # Enhanced Feature Flags (true/false)
-        self.ENABLE_WEATHER = self._str_to_bool(os.getenv("ENABLE_WEATHER", "true"))
+        # STREAMLINED: Core feature flags (true/false)
         self.ENABLE_UMPIRE_ANALYSIS = self._str_to_bool(os.getenv("ENABLE_UMPIRE_ANALYSIS", "true"))
-        self.ENABLE_VENUE_FACTORS = self._str_to_bool(os.getenv("ENABLE_VENUE_FACTORS", "true"))
         self.ENABLE_RECENT_STATS = self._str_to_bool(os.getenv("ENABLE_RECENT_STATS", "true"))
         self.ENABLE_GAME_INFO = self._str_to_bool(os.getenv("ENABLE_GAME_INFO", "true"))
-        
-        # New Enhanced Features
         self.ENABLE_PITCHER_WORKLOAD = self._str_to_bool(os.getenv("ENABLE_PITCHER_WORKLOAD", "true"))
         self.ENABLE_TEAM_FORM_ANALYSIS = self._str_to_bool(os.getenv("ENABLE_TEAM_FORM_ANALYSIS", "true"))
-        self.ENABLE_BALLPARK_ADJUSTMENTS = self._str_to_bool(os.getenv("ENABLE_BALLPARK_ADJUSTMENTS", "true"))
         
-        # Legacy Feature Flags (for backward compatibility)
-        self.ENABLE_FATIGUE_METRICS = self._str_to_bool(os.getenv("ENABLE_FATIGUE_METRICS", "false"))
+        # ENHANCED: Advanced Statcast features
+        self.ENABLE_ADVANCED_STATCAST = self._str_to_bool(os.getenv("ENABLE_ADVANCED_STATCAST", "true"))
+        self.ENABLE_EXPECTED_STATS = self._str_to_bool(os.getenv("ENABLE_EXPECTED_STATS", "true"))
+        self.ENABLE_BARREL_METRICS = self._str_to_bool(os.getenv("ENABLE_BARREL_METRICS", "true"))
+        self.ENABLE_PITCH_MOVEMENT = self._str_to_bool(os.getenv("ENABLE_PITCH_MOVEMENT", "true"))
         
         # Enhanced Logging
         self.LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
@@ -88,24 +82,22 @@ class Config:
         self.VERBOSE = self._str_to_bool(os.getenv("VERBOSE", "false"))
         self.DRY_RUN = self._str_to_bool(os.getenv("DRY_RUN", "false"))
         
-        # API Error Handling (NEW)
+        # API Error Handling
         self.API_RETRY_COUNT = int(os.getenv("API_RETRY_COUNT", "3"))
         self.API_TIMEOUT_SECONDS = float(os.getenv("API_TIMEOUT_SECONDS", "30.0"))
         self.GRACEFUL_API_DEGRADATION = self._str_to_bool(os.getenv("GRACEFUL_API_DEGRADATION", "true"))
     
     def _str_to_bool(self, value: str) -> bool:
-        """Convert string environment variable to boolean with better error handling"""
+        """Convert string environment variable to boolean"""
         if value is None or value == "":
             return False
         return str(value).lower() in ('true', '1', 'yes', 'on', 'enabled')
     
-    def validate(self, require_weather: bool = False, 
-                 require_database: bool = True) -> List[str]:
+    def validate(self, require_database: bool = True) -> List[str]:
         """
-        Validate configuration and return list of issues
+        Validate streamlined configuration and return list of issues
         
         Args:
-            require_weather: Whether weather API key is required
             require_database: Whether database connection is required
         """
         issues = []
@@ -116,14 +108,6 @@ class Config:
         
         if self.PG_DSN and not self._validate_pg_dsn():
             issues.append("PG_DSN format appears invalid (should be postgresql://user:pass@host:port/db)")
-        
-        # Weather API validation (only if not using placeholder data)
-        if not self.USE_PLACEHOLDER_DATA:
-            if require_weather and not self.OPENWEATHER_API_KEY:
-                issues.append("OPENWEATHER_API_KEY is required for real weather analysis but not set")
-            
-            if self.ENABLE_WEATHER and not self.OPENWEATHER_API_KEY:
-                issues.append("Weather is enabled but OPENWEATHER_API_KEY is not set (will use placeholder data)")
         
         # S3 validation
         if self.ENABLE_S3_STORAGE and not self.AWS_S3_BUCKET:
@@ -142,7 +126,6 @@ class Config:
         # Enhanced numeric validation
         numeric_validations = [
             (self.MLB_API_DELAY, "MLB_API_DELAY", 0),
-            (self.WEATHER_API_DELAY, "WEATHER_API_DELAY", 0),
             (self.STATS_API_DELAY, "STATS_API_DELAY", 0),
             (self.MIN_GAMES_FOR_ANALYSIS, "MIN_GAMES_FOR_ANALYSIS", 1),
             (self.MIN_SAMPLE_SIZE_UMPIRE, "MIN_SAMPLE_SIZE_UMPIRE", 1),
@@ -150,17 +133,12 @@ class Config:
             (self.MIN_TEAM_GAMES, "MIN_TEAM_GAMES", 1),
             (self.STRONG_EDGE_THRESHOLD, "STRONG_EDGE_THRESHOLD", 0),
             (self.MODERATE_EDGE_THRESHOLD, "MODERATE_EDGE_THRESHOLD", 0),
-            (self.WEATHER_IMPACT_THRESHOLD, "WEATHER_IMPACT_THRESHOLD", 0),
             (self.PLACEHOLDER_GAMES_PER_DAY, "PLACEHOLDER_GAMES_PER_DAY", 1),
         ]
         
         for value, name, min_value in numeric_validations:
             if value < min_value:
                 issues.append(f"{name} must be >= {min_value}")
-        
-        # Enhanced feature validation
-        if self.ENABLE_VENUE_FACTORS and not self.ENABLE_WEATHER and not self.USE_PLACEHOLDER_DATA:
-            issues.append("ENABLE_VENUE_FACTORS requires ENABLE_WEATHER to be true (or use placeholder data)")
         
         # Placeholder mode validation
         if self.USE_PLACEHOLDER_DATA and self.DEBUG:
@@ -248,42 +226,6 @@ class Config:
         except Exception as e:
             return False, f"Database manager creation failed: {e}"
     
-    def test_weather_api(self) -> tuple[bool, str]:
-        """Test weather API key with placeholder mode awareness"""
-        if self.USE_PLACEHOLDER_DATA:
-            return True, "Using placeholder weather data (no API key needed)"
-        
-        if not self.OPENWEATHER_API_KEY:
-            return False, "OPENWEATHER_API_KEY not set"
-        
-        try:
-            import requests
-            
-            # Test with a simple API call
-            url = "http://api.openweathermap.org/data/2.5/weather"
-            params = {
-                'q': 'New York',
-                'appid': self.OPENWEATHER_API_KEY,
-                'units': 'imperial'
-            }
-            
-            response = requests.get(url, params=params, timeout=self.API_TIMEOUT_SECONDS)
-            
-            if response.status_code == 200:
-                return True, "Weather API key valid"
-            elif response.status_code == 401:
-                return False, "Weather API key invalid or expired"
-            else:
-                return False, f"Weather API returned status {response.status_code}"
-                
-        except ImportError:
-            return False, "requests library not installed"
-        except Exception as e:
-            if self.GRACEFUL_API_DEGRADATION:
-                return False, f"Weather API test failed: {e} (will use placeholder data)"
-            else:
-                return False, f"Weather API test failed: {e}"
-    
     def test_s3_access(self) -> tuple[bool, str]:
         """Test S3 access with graceful degradation"""
         if not self.ENABLE_S3_STORAGE:
@@ -355,17 +297,17 @@ class Config:
                 raise
     
     def get_summary(self) -> Dict:
-        """Get enhanced configuration summary for debugging"""
+        """Get streamlined configuration summary for debugging"""
         return {
             "database_configured": bool(self.PG_DSN),
-            "weather_configured": bool(self.OPENWEATHER_API_KEY),
-            "weather_enabled": self.ENABLE_WEATHER,
             "s3_configured": bool(self.AWS_S3_BUCKET),
             "s3_enabled": self.ENABLE_S3_STORAGE,
-            "venue_factors_enabled": self.ENABLE_VENUE_FACTORS,
             "recent_stats_enabled": self.ENABLE_RECENT_STATS,
             "game_info_enabled": self.ENABLE_GAME_INFO,
             "pitcher_workload_enabled": self.ENABLE_PITCHER_WORKLOAD,
+            "advanced_statcast_enabled": self.ENABLE_ADVANCED_STATCAST,
+            "expected_stats_enabled": self.ENABLE_EXPECTED_STATS,
+            "barrel_metrics_enabled": self.ENABLE_BARREL_METRICS,
             "use_placeholder_data": self.USE_PLACEHOLDER_DATA,
             "output_dir": self.OUTPUT_DIR,
             "debug_mode": self.DEBUG,
@@ -374,31 +316,34 @@ class Config:
         }
     
     def print_status(self):
-        """Print enhanced configuration status with placeholder mode info"""
+        """Print streamlined configuration status"""
         mode = "PLACEHOLDER" if self.USE_PLACEHOLDER_DATA else "REAL DATA"
-        print(f"⚙️ Enhanced Configuration Status ({mode} MODE):")
+        print(f"⚙️ Streamlined Configuration Status ({mode} MODE):")
         print(f"   Database: {'✅' if self.PG_DSN else '❌'} {'(RDS)' if 'rds.amazonaws.com' in self.PG_DSN else '(local)' if self.PG_DSN else '(missing)'}")
         
         if self.USE_PLACEHOLDER_DATA:
-            print(f"   Weather API: 🔧 Using placeholder data (no API key needed)")
-            print(f"   MLB APIs: 🔧 Using placeholder data (no API keys needed)")
+            print(f"   Data Mode: 🔧 Using placeholder data (no API keys needed)")
         else:
-            print(f"   Weather API: {'✅' if self.OPENWEATHER_API_KEY else '❌'} {'(set)' if self.OPENWEATHER_API_KEY else '(missing)'}")
-            print(f"   MLB APIs: 🌐 Using real API calls")
+            print(f"   Data Mode: 📡 Using real API calls")
         
         print(f"   S3 Storage: {'✅' if self.AWS_S3_BUCKET else '❌'} {'(enabled)' if self.ENABLE_S3_STORAGE else '(disabled)' if self.AWS_S3_BUCKET else '(missing)'}")
         print(f"   Output Directory: {'✅' if Path(self.OUTPUT_DIR).exists() else '❌'} {self.OUTPUT_DIR}")
         print(f"   Debug Mode: {'🐛' if self.DEBUG else '📊'} {'ON' if self.DEBUG else 'OFF'}")
         
-        # Enhanced feature status
-        print(f"\n🎛️ Enhanced Features:")
-        print(f"   Weather Analysis: {'✅' if self.ENABLE_WEATHER else '❌'}")
-        print(f"   Venue Factors: {'✅' if self.ENABLE_VENUE_FACTORS else '❌'}")
+        # Streamlined features status
+        print(f"\n🎛️ Core Features:")
+        print(f"   Umpire Analysis: {'✅' if self.ENABLE_UMPIRE_ANALYSIS else '❌'}")
         print(f"   Recent Stats: {'✅' if self.ENABLE_RECENT_STATS else '❌'}")
         print(f"   Game Info: {'✅' if self.ENABLE_GAME_INFO else '❌'}")
         print(f"   Pitcher Workload: {'✅' if self.ENABLE_PITCHER_WORKLOAD else '❌'}")
         print(f"   Team Form Analysis: {'✅' if self.ENABLE_TEAM_FORM_ANALYSIS else '❌'}")
-        print(f"   Ballpark Adjustments: {'✅' if self.ENABLE_BALLPARK_ADJUSTMENTS else '❌'}")
+        
+        # Enhanced Statcast features
+        print(f"\n✨ Advanced Statcast Features:")
+        print(f"   Advanced Statcast: {'✅' if self.ENABLE_ADVANCED_STATCAST else '❌'}")
+        print(f"   Expected Stats (xBA, xwOBA): {'✅' if self.ENABLE_EXPECTED_STATS else '❌'}")
+        print(f"   Barrel Metrics: {'✅' if self.ENABLE_BARREL_METRICS else '❌'}")
+        print(f"   Pitch Movement Data: {'✅' if self.ENABLE_PITCH_MOVEMENT else '❌'}")
         
         # Placeholder mode details
         if self.USE_PLACEHOLDER_DATA:
@@ -413,20 +358,24 @@ class Config:
             print(f"   Prefix: {self.AWS_S3_PREFIX}")
             print(f"   Auto Upload: {'✅' if self.AUTO_UPLOAD_TO_S3 else '❌'}")
             print(f"   Auto Cleanup: {'✅' if self.AUTO_CLEANUP_LOCAL else '❌'}")
+        
+        print(f"\n🗑️ REMOVED: Weather & venue factors (Claude handles these)")
+        print(f"✨ ENHANCED: All advanced Statcast metrics included")
     
     def get_enabled_features(self) -> List[str]:
-        """Get list of enabled enhanced features"""
+        """Get list of enabled streamlined features"""
         features = []
         
         feature_mapping = {
-            'weather_analysis': self.ENABLE_WEATHER,
             'umpire_analysis': self.ENABLE_UMPIRE_ANALYSIS,
-            'venue_factors': self.ENABLE_VENUE_FACTORS,
             'recent_stats': self.ENABLE_RECENT_STATS,
             'game_info': self.ENABLE_GAME_INFO,
             'pitcher_workload': self.ENABLE_PITCHER_WORKLOAD,
             'team_form_analysis': self.ENABLE_TEAM_FORM_ANALYSIS,
-            'ballpark_adjustments': self.ENABLE_BALLPARK_ADJUSTMENTS,
+            'advanced_statcast': self.ENABLE_ADVANCED_STATCAST,
+            'expected_stats': self.ENABLE_EXPECTED_STATS,
+            'barrel_metrics': self.ENABLE_BARREL_METRICS,
+            'pitch_movement': self.ENABLE_PITCH_MOVEMENT,
             's3_storage': self.ENABLE_S3_STORAGE,
             'placeholder_mode': self.USE_PLACEHOLDER_DATA,
         }
@@ -440,13 +389,11 @@ class Config:
 # Global configuration instance
 config = Config()
 
-def require_config(require_weather: bool = False, require_database: bool = True, 
-                  graceful_degradation: bool = True) -> Config:
+def require_config(require_database: bool = True, graceful_degradation: bool = True) -> Config:
     """
-    FIXED: More flexible configuration validation with graceful degradation
+    STREAMLINED: Configuration validation focused on core requirements
     
     Args:
-        require_weather: Whether to require weather API
         require_database: Whether to require database connection
         graceful_degradation: If True, warn about missing features instead of exiting
     
@@ -456,8 +403,7 @@ def require_config(require_weather: bool = False, require_database: bool = True,
     Raises:
         SystemExit: Only if critical requirements are missing and graceful_degradation=False
     """
-    issues = config.validate(require_weather=require_weather, 
-                           require_database=require_database)
+    issues = config.validate(require_database=require_database)
     
     if not issues:
         return config
@@ -469,8 +415,6 @@ def require_config(require_weather: bool = False, require_database: bool = True,
     for issue in issues:
         if require_database and "PG_DSN" in issue and "not set" in issue:
             critical_issues.append(issue)
-        elif require_weather and "OPENWEATHER_API_KEY" in issue and "required" in issue and not config.USE_PLACEHOLDER_DATA:
-            critical_issues.append(issue)
         else:
             warning_issues.append(issue)
     
@@ -479,13 +423,6 @@ def require_config(require_weather: bool = False, require_database: bool = True,
         print("⚠️ Configuration warnings (features will be limited):")
         for issue in warning_issues:
             print(f"   • {issue}")
-        
-        # Auto-enable placeholder mode if API issues detected
-        if any("OPENWEATHER_API_KEY" in issue for issue in warning_issues):
-            if not config.USE_PLACEHOLDER_DATA:
-                print("   🔧 Auto-enabling placeholder mode for weather data")
-                config.USE_PLACEHOLDER_DATA = True
-                config.ENABLE_WEATHER = True
         
         if any("S3" in issue for issue in warning_issues):
             config.ENABLE_S3_STORAGE = False
@@ -501,11 +438,7 @@ def require_config(require_weather: bool = False, require_database: bool = True,
         if any("PG_DSN" in issue for issue in critical_issues):
             print("   1. Set database: export PG_DSN='postgresql://user:pass@host:5432/db'")
         
-        if require_weather and any("OPENWEATHER_API_KEY" in issue for issue in critical_issues):
-            print("   2. Set weather API: export OPENWEATHER_API_KEY='your_key'")
-            print("   OR: Enable placeholder mode: export USE_PLACEHOLDER_DATA=true")
-        
-        print("   3. Or run: python setup_env.py")
+        print("   2. Or run: python setup_env.py")
         
         if not graceful_degradation:
             sys.exit(1)
@@ -515,17 +448,14 @@ def require_config(require_weather: bool = False, require_database: bool = True,
     
     return config
 
-
 # Helper functions for different use cases
 def get_config_for_analysis() -> Config:
-    """Get config optimized for analysis (database required, weather optional)"""
-    return require_config(require_database=True, require_weather=False, graceful_degradation=True)
-
+    """Get config optimized for analysis (database required)"""
+    return require_config(require_database=True, graceful_degradation=True)
 
 def get_config_for_setup() -> Config:
     """Get config for setup/initialization (more lenient)"""
-    return require_config(require_database=False, require_weather=False, graceful_degradation=True)
-
+    return require_config(require_database=False, graceful_degradation=True)
 
 def get_config() -> Config:
     """Get configuration instance without strict validation"""

@@ -1,15 +1,14 @@
 -- migrations/002_foreign_keys.sql
--- FIXED: Properly deferrable foreign keys that won't block loading
--- These constraints are checked only at transaction commit time
+-- STREAMLINED: Foreign keys for 7-table schema only
+-- REMOVED: Weather and venue_factors constraints (tables removed)
 
 -- Drop existing foreign keys if they exist
 ALTER TABLE IF EXISTS public.games DROP CONSTRAINT IF EXISTS fk_games_game_info;
 ALTER TABLE IF EXISTS public.play_by_play DROP CONSTRAINT IF EXISTS fk_pbp_game_info;
-ALTER TABLE IF EXISTS public.weather DROP CONSTRAINT IF EXISTS fk_weather_game_info;
 ALTER TABLE IF EXISTS public.umpires DROP CONSTRAINT IF EXISTS fk_umpires_game_info;
 ALTER TABLE IF EXISTS public.lineups DROP CONSTRAINT IF EXISTS fk_lineups_game_info;
 
--- CRITICAL FIX: Set default constraint behavior for this session
+-- Set default constraint behavior for this session
 SET CONSTRAINTS ALL DEFERRED;
 
 -- Add foreign key constraints that are properly deferrable
@@ -25,13 +24,6 @@ DEFERRABLE INITIALLY DEFERRED;
 -- Play by play references game_info  
 ALTER TABLE public.play_by_play 
 ADD CONSTRAINT fk_pbp_game_info 
-FOREIGN KEY (game_pk) REFERENCES public.game_info(game_pk) 
-ON DELETE CASCADE 
-DEFERRABLE INITIALLY DEFERRED;
-
--- Weather references game_info
-ALTER TABLE public.weather 
-ADD CONSTRAINT fk_weather_game_info 
 FOREIGN KEY (game_pk) REFERENCES public.game_info(game_pk) 
 ON DELETE CASCADE 
 DEFERRABLE INITIALLY DEFERRED;
@@ -75,13 +67,6 @@ BEGIN
     
     UNION ALL
     
-    SELECT 'weather'::TEXT, 'fk_weather_game_info'::TEXT, COUNT(*)::BIGINT
-    FROM public.weather w
-    LEFT JOIN public.game_info gi ON w.game_pk = gi.game_pk
-    WHERE gi.game_pk IS NULL
-    
-    UNION ALL
-    
     SELECT 'umpires'::TEXT, 'fk_umpires_game_info'::TEXT, COUNT(*)::BIGINT
     FROM public.umpires u
     LEFT JOIN public.game_info gi ON u.game_pk = gi.game_pk
@@ -96,4 +81,4 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
-COMMENT ON FUNCTION check_foreign_key_violations() IS 'Check for foreign key violations before they cause loading failures - use this for debugging';
+COMMENT ON FUNCTION check_foreign_key_violations() IS 'Check for foreign key violations in streamlined 7-table schema';

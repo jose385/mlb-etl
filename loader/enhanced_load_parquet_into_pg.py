@@ -3,6 +3,7 @@
 enhanced_load_parquet_into_pg.py – STREAMLINED: Loads 7 core tables only
 REMOVED: Weather and venue_factors tables (Claude handles these)
 ENHANCED: Better error handling for advanced Statcast metrics
+FIXED: All integer columns including launch_speed_angle properly converted
 
 Usage:
     python enhanced_load_parquet_into_pg.py [--input-dir DIR] [--tables T1 T2 ...]
@@ -19,21 +20,55 @@ import psycopg2
 import numpy as np
 
 def fix_nullable_integers(df):
-    """Fix nullable integer columns that get converted to float during CSV export"""
+    """FIXED: Enhanced integer conversion including all advanced Statcast metrics"""
+    # COMPLETE list of all integer columns across all tables
     integer_columns = [
-        'runner_on_1b', 'runner_on_2b', 'runner_on_3b',  # play_by_play table
-        'person_id', 'team_id', 'batting_order',           # lineups table  
-        'umpire_id',                                        # umpires table
-        'game_pk', 'at_bat_number', 'pitch_number',        # games table
-        'batter', 'pitcher'                                 # games table
+        # Core game identifiers
+        'game_pk', 'at_bat_number', 'pitch_number', 
+        'batter', 'pitcher', 'person_id', 'team_id',
+        
+        # Umpire and lineup data
+        'umpire_id', 'batting_order',
+        
+        # Play-by-play runners
+        'runner_on_1b', 'runner_on_2b', 'runner_on_3b',
+        
+        # Season stats (from lineups)
+        'season_home_runs', 'season_rbi', 'season_strikeouts',
+        
+        # FIXED: Advanced Statcast metrics that need integer conversion
+        'launch_speed_angle',  # This is the critical one causing errors!
+        
+        # Count/situation data  
+        'balls', 'strikes', 'outs_when_up', 'inning',
+        'at_bat_index', 'event_index', 'outs',
+        
+        # Score tracking
+        'home_score', 'away_score', 'rbi',
+        
+        # Other game context
+        'series_game_number', 'home_team_rest_days', 'away_team_rest_days',
+        'attendance', 'game_length_minutes',
+        'home_wins_before', 'home_losses_before', 
+        'away_wins_before', 'away_losses_before',
+        
+        # Recent stats integers
+        'games_played', 'home_runs', 'rbis', 'stolen_bases', 
+        'strikeouts', 'walks', 'hits_allowed', 'runs_allowed',
+        'quality_starts', 'saves', 'blown_saves',
+        'consecutive_games', 'consecutive_appearances'
     ]
     
     for col in integer_columns:
         if col in df.columns:
-            if df[col].dtype == 'float64':
-                df[col] = df[col].astype('Int64')
-            elif df[col].dtype == 'Int64':
-                pass
+            if df[col].dtype in ['float64', 'Float64', 'object']:
+                try:
+                    # Convert to numeric first, then round and convert to nullable integer
+                    df[col] = pd.to_numeric(df[col], errors='coerce')
+                    df[col] = df[col].round().astype('Int64')
+                except:
+                    # If conversion fails, leave as is
+                    pass
     
     return df
 
@@ -251,8 +286,11 @@ def validate_enhanced_statcast_data(df: pd.DataFrame, table: str) -> pd.DataFram
         if 'estimated_slg_using_speedangle' in df.columns:
             df['estimated_slg_using_speedangle'] = df['estimated_slg_using_speedangle'].clip(lower=0.000, upper=4.000)
         
+        # FIXED: Proper launch_speed_angle validation
         if 'launch_speed_angle' in df.columns:
             df['launch_speed_angle'] = df['launch_speed_angle'].clip(lower=1, upper=8)
+            # Ensure it's properly converted to integer
+            df['launch_speed_angle'] = pd.to_numeric(df['launch_speed_angle'], errors='coerce').round().astype('Int64')
         
         if 'release_spin_rate' in df.columns:
             df['release_spin_rate'] = df['release_spin_rate'].clip(lower=1000, upper=4000)
@@ -525,7 +563,7 @@ def load_table(conn, table: str, df: pd.DataFrame):
 
 @retry_database_operation(max_retries=2, delay=1)
 def load_all_files_in_transaction(conn, files_and_tables: List[tuple]):
-    """Load all files in a single transaction with deferred constraints"""
+    """FIXED: Load all files with proper integer conversion including launch_speed_angle"""
     cur = conn.cursor()
     
     try:
@@ -542,11 +580,10 @@ def load_all_files_in_transaction(conn, files_and_tables: List[tuple]):
             try:
                 # Read parquet file
                 df = pd.read_parquet(file_path)
-                integer_columns = ['runner_on_1b', 'runner_on_2b', 'runner_on_3b', 'person_id', 'team_id', 'umpire_id', 'game_pk',
-                   'season_home_runs', 'season_rbi', 'season_strikeouts', 'at_bat_number', 'pitch_number', 'batter', 'pitcher']
-                for col in integer_columns:
-                    if col in df.columns and df[col].dtype in ['float64', 'Float64']:
-                        df[col] = df[col].round().astype('Int64')
+                
+                # FIXED: Apply comprehensive integer conversion
+                df = fix_nullable_integers(df)
+                
                 print(f"   📊 Read parquet: {len(df)} rows, {len(df.columns)} columns")
                 
                 if df.empty:

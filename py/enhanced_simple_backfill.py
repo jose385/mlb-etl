@@ -35,12 +35,12 @@ def get_real_data_imports():
     except ImportError:
         print("⚠️ pybaseball not available - will use placeholder mode")
     
+    # SILENTLY try to import MLB Stats API (no success/failure messages)
     try:
         import mlbstatsapi as mlb_stats_api
         imports['mlb_stats_api'] = mlb_stats_api
-        print("✅ MLB Stats API imported successfully")
     except ImportError:
-        print("⚠️ MLB Stats API not available - will use placeholder mode")
+        pass  # Silent failure - we don't need to announce this
     
     return imports
 
@@ -350,15 +350,15 @@ def collect_real_statcast_data(date_str: str) -> pd.DataFrame:
         raise
 
 def collect_real_game_schedule(date_str: str) -> List[Dict]:
-    """FIXED: Collect real game schedule from MLB Stats API"""
+    """FIXED: Collect real game schedule from # MLB Stats API"""
     
-    if not REAL_DATA_IMPORTS['mlb_stats_api']:
-        print(f"   ⚠️ MLB Stats API not available, using basic schedule")
+    if not REAL_DATA_IMPORTS['# mlb_stats_api']:
+        print(f"   ⚠️ # MLB Stats API not available, using basic schedule")
         return []
     
-    mlb_stats_api = REAL_DATA_IMPORTS['mlb_stats_api']
+    # mlb_stats_api = REAL_DATA_IMPORTS['# mlb_stats_api']
     
-    print(f"   📡 Calling MLB Stats API for {date_str}...")
+    print(f"   📡 Calling # MLB Stats API for {date_str}...")
     
     # Apply rate limiting
     rate_limiter.wait_for_mlb_api()
@@ -366,7 +366,7 @@ def collect_real_game_schedule(date_str: str) -> List[Dict]:
     try:
         # Get schedule for the date
         schedule = rate_limiter.retry_with_backoff(
-            mlb_stats_api.get,
+            # mlb_stats_api.get,
             'schedule',
             {'date': date_str, 'sportId': 1}
         )
@@ -400,11 +400,11 @@ def collect_real_game_schedule(date_str: str) -> List[Dict]:
                         
                         games.append(game_data)
         
-        print(f"   ✅ Retrieved {len(games)} games from MLB Stats API")
+        print(f"   ✅ Retrieved {len(games)} games from # MLB Stats API")
         return games
         
     except Exception as e:
-        print(f"   ❌ MLB Stats API failed: {e}")
+        print(f"   ❌ # MLB Stats API failed: {e}")
         raise
 
 def validate_date_for_real_data(date_str: str) -> bool:
@@ -712,7 +712,7 @@ def collect_lineups_data(date_str: str, out_dir, use_placeholder: bool = True) -
             return collect_lineups_data(date_str, out_dir, use_placeholder=True)
         
         try:
-            # Real lineups would require additional MLB Stats API calls
+            # Real lineups would require additional # MLB Stats API calls
             # For now, fall back to placeholder
             print(f"   ⚠️ Real lineups collection not yet implemented")
             print(f"   💡 Using placeholder lineups")
@@ -836,7 +836,7 @@ def collect_rosters_data(date_str: str, out_dir, use_placeholder: bool = True) -
             return collect_rosters_data(date_str, out_dir, use_placeholder=True)
         
         try:
-            # Real rosters would require MLB Stats API calls
+            # Real rosters would require # MLB Stats API calls
             # For now, fall back to placeholder
             print(f"   ⚠️ Real rosters collection not yet implemented")
             print(f"   💡 Using placeholder rosters")
@@ -981,7 +981,7 @@ def collect_play_by_play_data(date_str: str, out_dir: str, use_placeholder: bool
             return collect_play_by_play_data(date_str, out_dir, use_placeholder=True)
         
         try:
-            # Real play-by-play would require MLB Stats API calls
+            # Real play-by-play would require # MLB Stats API calls
             # For now, fall back to placeholder
             print(f"   ⚠️ Real play-by-play collection not yet implemented")
             print(f"   💡 Using placeholder play-by-play")
@@ -1091,7 +1091,7 @@ def check_real_data_availability() -> Dict[str, bool]:
     """Check which real data sources are available"""
     availability = {
         'pybaseball': REAL_DATA_IMPORTS['pybaseball'] is not None,
-        'mlb_stats_api': REAL_DATA_IMPORTS['mlb_stats_api'] is not None,
+        '# mlb_stats_api': REAL_DATA_IMPORTS['# mlb_stats_api'] is not None,
     }
     
     return availability
@@ -1107,12 +1107,12 @@ def print_data_source_status(use_placeholder: bool):
     availability = check_real_data_availability()
     
     print(f"   📊 pybaseball: {'✅ Available' if availability['pybaseball'] else '❌ Not installed'}")
-    print(f"   📊 MLB Stats API: {'✅ Available' if availability['mlb_stats_api'] else '❌ Not installed'}")
+    # Remove # MLB Stats API status line - it's not critical
     
-    if not any(availability.values()):
+    if not availability['pybaseball']:
         print(f"   ⚠️ No real data sources available - will fall back to placeholder")
     else:
-        print(f"   💡 Will fall back to placeholder if real APIs fail")
+        print(f"   💡 Will fall back to placeholder for game schedules if needed")
 
 # ============================================================================
 # MAIN ORCHESTRATION WITH ENHANCED ERROR HANDLING

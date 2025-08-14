@@ -1009,10 +1009,10 @@ def collect_recent_stats_data(date_str: str, out_dir: str, use_placeholder: bool
         
         for player_id in player_ids:
             for stat_type in stat_types:
-                # Create unique combination to avoid duplicates
+                # FIXED: Use 'player_id' instead of 'person_id' to match schema
                 stats.append({
                     'stat_date': date_str,
-                    'player_id': player_id,
+                    'player_id': player_id,  # FIXED: Changed from 'person_id'
                     'stat_type': stat_type,
                     'games_played': random.randint(1, 30),
                     'date_range_start': date_str,

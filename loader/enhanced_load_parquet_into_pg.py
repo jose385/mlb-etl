@@ -1,124 +1,117 @@
 #!/usr/bin/env python3
 """
-enhanced_load_parquet_into_pg.py – LIVE DATA READY: Comprehensive loader for all MLB data
-ENHANCED: Handles ~40+ additional Statcast columns with proper type conversion
-IMPROVED: Robust column mapping for real pybaseball data
-FIXED: All data type issues including mixed types and nullable integers
+STREAMLINED MLB Data Loader - Claude-Optimized Version
+Loads only the essential data that Claude cannot research:
+- Statcast data (games table) - THE GOLD MINE
+- Basic game info (game_info table) - CONTEXT
+- Optionally play-by-play sequences - DETAILED ANALYSIS
 
-Usage:
-    python enhanced_load_parquet_into_pg.py [--input-dir DIR] [--tables T1 T2 ...]
+Skips: lineups, umpires, rosters, recent_stats (Claude will research these)
 """
-import os
+
 import argparse
-import io
-import time
-import re
-from pathlib import Path
-from functools import wraps
-from typing import List, Dict, Any
+import os
+import sys
 import pandas as pd
 import psycopg2
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
+import time
+import io
+import re
 import numpy as np
+from functools import wraps
+
+# Add project root to path for imports
+sys.path.append(str(Path(__file__).parent.parent))
+
+try:
+    from py.config import require_config
+except ImportError:
+    print("❌ Could not import config. Make sure you're running from the project root.")
+    sys.exit(1)
+
+# ============================================================================
+# STREAMLINED TABLE CONFIGURATION
+# ============================================================================
+
+# Only the essential tables for betting analysis
+CORE_TABLES = {
+    'games': {
+        'file_pattern': 'games_*.parquet',
+        'description': 'Statcast pitch data (THE GOLD MINE)',
+        'priority': 2,
+        'required': True
+    },
+    'game_info': {
+        'file_pattern': 'game_info_*.parquet', 
+        'description': 'Basic game context',
+        'priority': 1,
+        'required': True
+    },
+    'play_by_play': {
+        'file_pattern': 'play_by_play_*.parquet',
+        'description': 'Game sequence data (OPTIONAL)',
+        'priority': 3,
+        'required': False
+    }
+}
+
+# Tables that Claude will research (not loaded by this system)
+CLAUDE_RESEARCH_TABLES = [
+    'lineups',      # Starting lineups and batting orders
+    'rosters',      # Current team rosters  
+    'umpires',      # Umpire assignments and tendencies
+    'recent_stats', # Recent player performance trends
+    'weather',      # Weather conditions
+    'venue_factors' # Ballpark factors
+]
+
+# ============================================================================
+# ENHANCED DATA TYPE HANDLING (from original)
+# ============================================================================
 
 def get_comprehensive_column_mappings():
-    """
-    ENHANCED: Comprehensive column mappings for live pybaseball data
-    Returns dictionaries for proper data type handling
-    """
-    # EXPANDED: All integer columns from real Statcast/pybaseball data
+    """Enhanced column mappings for live pybaseball data"""
+    
+    # Core integer columns for Statcast data
     integer_columns = {
-        # Core game identifiers
         'game_pk', 'at_bat_number', 'pitch_number', 'game_year',
-        'batter', 'pitcher', 'person_id', 'team_id', 'fielder_2', 'fielder_3',
-        'fielder_4', 'fielder_5', 'fielder_6', 'fielder_7', 'fielder_8', 'fielder_9',
-        
-        # Umpire and lineup data
-        'umpire_id', 'batting_order', 'home_team_id', 'away_team_id',
-        
-        # Play-by-play runners and situations
-        'runner_on_1b', 'runner_on_2b', 'runner_on_3b',
-        'balls', 'strikes', 'outs_when_up', 'inning', 'inning_topbot',
-        'at_bat_index', 'event_index', 'outs', 'post_away_score', 'post_home_score',
-        
-        # Statcast metrics that should be integers
-        'launch_speed_angle', 'sweet_spot_code', 'barrel', 'hit_location',
-        'bb_type', 'estimated_ba_using_speedangle_int', 'estimated_woba_using_speedangle_int',
-        
-        # Season and historical stats
-        'season_home_runs', 'season_rbi', 'season_strikeouts', 'season_walks',
-        'season_hits', 'season_doubles', 'season_triples', 'season_stolen_bases',
-        
-        # Score tracking
-        'home_score', 'away_score', 'rbi', 'bat_score', 'fld_score',
-        'post_bat_score', 'post_fld_score',
-        
-        # Game context
-        'series_game_number', 'home_team_rest_days', 'away_team_rest_days',
-        'attendance', 'game_length_minutes', 'delay_minutes',
-        'home_wins_before', 'home_losses_before', 
-        'away_wins_before', 'away_losses_before',
-        
-        # Recent performance stats
-        'games_played', 'home_runs', 'rbis', 'stolen_bases', 
-        'strikeouts', 'walks', 'hits_allowed', 'runs_allowed',
-        'quality_starts', 'saves', 'blown_saves', 'holds',
-        'consecutive_games', 'consecutive_appearances',
-        
-        # Additional Statcast integers
-        'spin_dir', 'spin_rate_deprecated', 'break_angle_deprecated',
-        'break_length_deprecated', 'zone', 'des_runs', 'game_type_id'
+        'batter', 'pitcher', 'person_id', 'team_id',
+        'balls', 'strikes', 'outs_when_up', 'inning', 
+        'zone', 'launch_speed_angle', 'barrel',
+        'home_score', 'away_score', 'rbi',
+        'attendance', 'game_length_minutes',
+        'series_game_number', 'home_team_rest_days', 'away_team_rest_days'
     }
     
-    # EXPANDED: All float/numeric columns that need precision handling
+    # Core float columns for Statcast metrics
     float_columns = {
-        # Statcast velocities and distances
         'release_speed', 'release_pos_x', 'release_pos_y', 'release_pos_z',
         'effective_speed', 'release_spin_rate', 'release_extension',
         'hit_distance_sc', 'launch_speed', 'launch_angle',
-        
-        # Ball tracking
         'vx0', 'vy0', 'vz0', 'ax', 'ay', 'az', 'sz_top', 'sz_bot',
         'pfx_x', 'pfx_z', 'plate_x', 'plate_z', 'hc_x', 'hc_y',
-        
-        # Expected/estimated metrics
         'estimated_ba_using_speedangle', 'estimated_woba_using_speedangle',
         'estimated_slg_using_speedangle', 'woba_value', 'woba_denom',
-        'babip_value', 'iso_value', 'launch_speed_angle_value',
-        
-        # Pitcher metrics
-        'delta_home_win_exp', 'delta_run_exp', 'pfx_x_norm', 'pfx_z_norm',
-        'break_angle', 'break_length', 'spin_axis',
-        
-        # Advanced metrics
-        'hit_distance', 'spray_angle', 'exit_velocity_avg', 'hard_hit_percent',
-        'barrel_percent', 'whiff_percent', 'xba', 'xslg', 'xwoba',
-        
-        # Player performance metrics
-        'batting_avg', 'on_base_percent', 'slugging_percent', 'ops',
-        'era', 'whip', 'k_percent', 'bb_percent', 'hr_fb_rate',
-        'babip', 'lob_percent', 'gb_percent', 'fb_percent', 'ld_percent',
-        'pop_percent', 'hard_percent', 'medium_percent', 'soft_percent'
+        'babip_value', 'iso_value', 'delta_run_exp'
     }
     
-    # Date columns that need proper datetime handling
+    # Date columns
     date_columns = {
-        'game_date', 'stat_date', 'roster_date', 'birth_date',
-        'debut_date', 'final_game_date', 'transaction_date'
+        'game_date', 'stat_date'
     }
     
     # Boolean columns
     boolean_columns = {
-        'is_home_team', 'is_starting_pitcher', 'is_reliever', 'is_closer',
-        'is_left_handed', 'is_right_handed', 'on_il', 'is_active',
-        'if_fielding_alignment', 'of_fielding_alignment'
+        'is_home_team', 'extra_innings'
     }
     
-    # String columns that should remain as text
+    # String columns
     string_columns = {
-        'player_name', 'team_name', 'description', 'des', 'events', 'type',
+        'player_name', 'description', 'des', 'events', 'type',
         'pitch_type', 'stand', 'p_throws', 'home_team', 'away_team',
-        'venue_name', 'weather', 'wind', 'field_info', 'position',
-        'game_type', 'series_description', 'umpire_name', 'umpire_position'
+        'venue_name', 'game_status', 'winning_team'
     }
     
     return {
@@ -130,10 +123,7 @@ def get_comprehensive_column_mappings():
     }
 
 def normalize_column_name(col_name: str) -> str:
-    """
-    ENHANCED: Normalize column names to handle pybaseball variations
-    Handles camelCase, snake_case, and various naming conventions
-    """
+    """Normalize column names to handle pybaseball variations"""
     if not col_name:
         return col_name
     
@@ -143,31 +133,18 @@ def normalize_column_name(col_name: str) -> str:
     
     # Handle common variations
     replacements = {
-        'game_pk': 'game_pk',
         'gamepk': 'game_pk',
         'game_id': 'game_pk',
-        'at_bat_number': 'at_bat_number',
         'atbatnumber': 'at_bat_number',
-        'pitch_number': 'pitch_number',
         'pitchnumber': 'pitch_number',
         'player_id': 'person_id',
         'playerid': 'person_id',
-        'mlb_id': 'person_id',
-        'batter_id': 'batter',
-        'pitcher_id': 'pitcher',
-        'home_team_id': 'home_team_id',
-        'away_team_id': 'away_team_id',
-        'estimated_ba_using_speedangle': 'estimated_ba_using_speedangle',
-        'estimated_woba_using_speedangle': 'estimated_woba_using_speedangle',
     }
     
     return replacements.get(normalized, normalized)
 
 def fix_comprehensive_data_types(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    ENHANCED: Comprehensive data type fixing for live pybaseball data
-    Handles all edge cases and data type conversions
-    """
+    """Comprehensive data type fixing for live pybaseball data"""
     if df.empty:
         return df
     
@@ -180,16 +157,13 @@ def fix_comprehensive_data_types(df: pd.DataFrame) -> pd.DataFrame:
     # Handle infinite values and NaN replacements
     df = df.replace([np.inf, -np.inf], None)
     
-    # Fix integer columns with comprehensive error handling
+    # Fix integer columns
     for col in df.columns:
         if col in column_mappings['integers']:
             try:
-                # Handle mixed types and object columns
                 if df[col].dtype == 'object':
-                    # Try to extract numeric values from strings
                     df[col] = pd.to_numeric(df[col], errors='coerce')
                 
-                # Convert to nullable integer
                 if df[col].dtype in ['float64', 'Float64', 'object']:
                     df[col] = pd.to_numeric(df[col], errors='coerce')
                     df[col] = df[col].round().astype('Int64')
@@ -200,20 +174,17 @@ def fix_comprehensive_data_types(df: pd.DataFrame) -> pd.DataFrame:
                 print(f"   ⚠️ Warning: Could not convert {col} to integer: {e}")
                 continue
     
-    # Fix float columns with proper precision
+    # Fix float columns
     for col in df.columns:
         if col in column_mappings['floats']:
             try:
                 if df[col].dtype == 'object':
-                    # Handle string representations of floats
                     df[col] = pd.to_numeric(df[col], errors='coerce')
                 
-                # Ensure proper float type
                 df[col] = pd.to_numeric(df[col], errors='coerce')
                 
-                # Apply appropriate precision based on column type
-                if col in ['estimated_ba_using_speedangle', 'estimated_woba_using_speedangle', 
-                          'babip_value', 'batting_avg', 'on_base_percent']:
+                # Apply appropriate precision
+                if col in ['estimated_ba_using_speedangle', 'estimated_woba_using_speedangle', 'babip_value']:
                     df[col] = df[col].round(3)
                 elif col in ['pfx_x', 'pfx_z', 'hc_x', 'hc_y', 'plate_x', 'plate_z']:
                     df[col] = df[col].round(1)
@@ -236,29 +207,9 @@ def fix_comprehensive_data_types(df: pd.DataFrame) -> pd.DataFrame:
                 print(f"   ⚠️ Warning: Could not convert {col} to date: {e}")
                 continue
     
-    # Fix boolean columns
-    for col in df.columns:
-        if col in column_mappings['booleans']:
-            try:
-                # Handle various boolean representations
-                if df[col].dtype == 'object':
-                    bool_map = {
-                        'true': True, 'false': False, 'True': True, 'False': False,
-                        'yes': True, 'no': False, 'Y': True, 'N': False,
-                        '1': True, '0': False, 1: True, 0: False,
-                        'traditional': False, 'strategic': True, 'infield_shift': True,
-                        'outfield_shift': True, 'standard': False
-                    }
-                    df[col] = df[col].map(bool_map).fillna(df[col])
-                    
-            except Exception as e:
-                print(f"   ⚠️ Warning: Could not convert {col} to boolean: {e}")
-                continue
-    
-    # Handle any remaining object columns that should be strings
+    # Fix string columns
     for col in df.columns:
         if col in column_mappings['strings'] or df[col].dtype == 'object':
-            # Ensure strings are properly handled for PostgreSQL
             df[col] = df[col].astype(str)
             df[col] = df[col].replace('nan', None)
             df[col] = df[col].replace('<NA>', None)
@@ -270,133 +221,61 @@ def fix_comprehensive_data_types(df: pd.DataFrame) -> pd.DataFrame:
     
     return df
 
-def get_enhanced_table_mapping(file_stem: str) -> str:
-    """
-    ENHANCED: Advanced table mapping for real pybaseball data
-    Handles all variations and patterns from live data sources
-    """
+# ============================================================================
+# STREAMLINED TABLE MAPPING
+# ============================================================================
+
+def get_table_mapping(file_stem: str) -> str:
+    """Streamlined table mapping for essential tables only"""
+    
     # Normalize the file stem
     file_stem = file_stem.lower().replace('-', '_')
     
-    # Handle exact filename matches first (including date patterns)
-    exact_patterns = {
-        'recent_stats': 'recent_stats',
-        'player_stats': 'recent_stats',
-        'batting_stats': 'recent_stats',
-        'pitching_stats': 'recent_stats',
-    }
-    
-    # Check for exact matches
-    for pattern, table in exact_patterns.items():
-        if pattern in file_stem:
-            return table
-    
-    # Handle date-suffixed files (like "games_2024_07_15" or "statcast_2024-07-15")
+    # Handle date-suffixed files (like "games_2024_07_15")
     date_pattern = re.compile(r'(.+?)_(\d{4})[_-](\d{1,2})[_-](\d{1,2})$')
     match = date_pattern.match(file_stem)
     if match:
         base_name = match.group(1)
     else:
-        # Handle other patterns
         parts = file_stem.split('_')
         base_name = parts[0] if parts else file_stem
     
-    # ENHANCED: Comprehensive table mappings for pybaseball data
+    # Streamlined table mappings (only essential tables)
     table_mapping = {
         # Statcast data (primary source)
         'statcast': 'games',
         'statcast_data': 'games',
-        'statcast_pitch': 'games',
-        'statcast_pitches': 'games',
         'pitch_data': 'games',
-        'pitch_by_pitch': 'games',
-        
-        # Game-level data
         'games': 'games',
-        'game_data': 'games',
-        'mlb_games': 'games',
-        
-        # Play-by-play data
-        'play_by_play': 'play_by_play',
-        'pbp': 'play_by_play',
-        'play_data': 'play_by_play',
-        'statsapi_pbp': 'play_by_play',
-        'events': 'play_by_play',
-        'at_bats': 'play_by_play',
         
         # Game info
         'game_info': 'game_info',
         'gameinfo': 'game_info',
-        'schedule': 'game_info',
-        'game_schedule': 'game_info',
-        'games_info': 'game_info',
         
-        # Lineups
-        'lineups': 'lineups',
-        'lineup': 'lineups',
-        'starting_lineups': 'lineups',
-        'batting_order': 'lineups',
-        'starters': 'lineups',
-        
-        # Rosters
-        'rosters': 'rosters',
-        'roster': 'rosters',
-        'team_roster': 'rosters',
-        'active_roster': 'rosters',
-        'player_roster': 'rosters',
-        
-        # Umpires
-        'umpires': 'umpires',
-        'umpire': 'umpires',
-        'umpire_data': 'umpires',
-        'game_umpires': 'umpires',
-        
-        # Recent stats
-        'recent_stats': 'recent_stats',
-        'player_stats': 'recent_stats',
-        'batting_stats': 'recent_stats',
-        'pitching_stats': 'recent_stats',
-        'season_stats': 'recent_stats',
-        'performance': 'recent_stats',
-        'stats': 'recent_stats',
-        
-        # Alternative naming patterns
-        'mlb_data': 'games',
-        'baseball_data': 'games',
-        'pitch_fx': 'games',
-        'trackman': 'games',
+        # Play-by-play (optional)
+        'play_by_play': 'play_by_play',
+        'pbp': 'play_by_play',
+        'play_data': 'play_by_play',
     }
     
     # Try exact match first
     if base_name in table_mapping:
         return table_mapping[base_name]
     
-    # Intelligent pattern matching
-    for pattern, table in table_mapping.items():
-        if pattern in base_name or base_name in pattern:
-            return table
-    
-    # Advanced pattern recognition
-    if any(word in base_name for word in ['pitch', 'statcast', 'trackman']):
+    # Pattern matching for variations
+    if any(word in base_name for word in ['pitch', 'statcast']):
         return 'games'
-    elif any(word in base_name for word in ['play', 'event', 'at_bat', 'pbp']):
-        return 'play_by_play'
-    elif any(word in base_name for word in ['game', 'schedule']) and 'info' in base_name:
+    elif 'game' in base_name and 'info' in base_name:
         return 'game_info'
-    elif any(word in base_name for word in ['game', 'schedule']):
-        return 'games'
-    elif any(word in base_name for word in ['lineup', 'batting_order', 'starter']):
-        return 'lineups'
-    elif any(word in base_name for word in ['roster', 'player']):
-        return 'rosters'
-    elif any(word in base_name for word in ['umpire', 'official']):
-        return 'umpires'
-    elif any(word in base_name for word in ['stat', 'performance', 'batting', 'pitching']):
-        return 'recent_stats'
+    elif any(word in base_name for word in ['play', 'pbp']):
+        return 'play_by_play'
     
-    # Final fallback with warning
-    print(f"⚠️ Warning: No table mapping found for '{file_stem}', using base name: {base_name}")
+    # Default fallback
     return base_name
+
+# ============================================================================
+# DATABASE CONNECTION AND UTILITIES
+# ============================================================================
 
 def retry_database_operation(max_retries=3, delay=1):
     """Decorator to retry database operations with exponential backoff"""
@@ -424,43 +303,10 @@ def retry_database_operation(max_retries=3, delay=1):
         return wrapper
     return decorator
 
-def get_loading_order_priority(data_type: str) -> int:
-    """Loading order for 7 tables - lower numbers load first"""
-    loading_order = {
-        'game_info': 1,      # PRIMARY - All other tables reference this
-        'rosters': 2,        # INDEPENDENT - Only references dates/teams
-        'games': 3,          # References game_info.game_pk
-        'play_by_play': 4,   # References game_info.game_pk  
-        'lineups': 5,        # References game_info.game_pk
-        'umpires': 6,        # References game_info.game_pk
-        'recent_stats': 7,   # INDEPENDENT but load last
-    }
-    return loading_order.get(data_type, 999)
-
-def sort_files_by_dependency_order(files: List[Path]) -> List[Path]:
-    """Sort files to load in dependency order"""
-    def get_file_priority(file_path: Path) -> tuple:
-        stem = file_path.stem
-        table_name = get_enhanced_table_mapping(stem)
-        priority = get_loading_order_priority(table_name)
-        return (priority, stem)
-    
-    sorted_files = sorted(files, key=get_file_priority)
-    
-    print(f"📋 Loading order determined:")
-    for file in sorted_files:
-        stem = file.stem
-        table_name = get_enhanced_table_mapping(stem)
-        priority = get_loading_order_priority(table_name)
-        print(f"   {priority:2d}. {file.name} → {table_name}")
-    
-    return sorted_files
-
 @retry_database_operation(max_retries=3, delay=2)
 def connect():
     """Connect to PostgreSQL with configuration validation"""
     try:
-        from py.config import require_config
         config = require_config(require_database=True, graceful_degradation=True)
         
         if not config.PG_DSN:
@@ -489,103 +335,98 @@ def get_table_columns(conn, table: str):
     cur.execute(sql, (table,))
     return [row[0] for row in cur.fetchall()]
 
-def validate_enhanced_data(df: pd.DataFrame, table: str) -> pd.DataFrame:
-    """
-    ENHANCED: Comprehensive data validation for live data
-    Handles all edge cases and validates all metrics properly
-    """
-    if df.empty:
-        return df
+def validate_table_exists(cursor, table_name: str) -> bool:
+    """Check if table exists in database"""
+    try:
+        cursor.execute("""
+            SELECT EXISTS (
+                SELECT FROM information_schema.tables 
+                WHERE table_schema = 'public' 
+                AND table_name = %s
+            );
+        """, (table_name,))
+        
+        return cursor.fetchone()[0]
+    except Exception as e:
+        print(f"⚠️ Could not check if table {table_name} exists: {e}")
+        return False
+
+# ============================================================================
+# FILE DISCOVERY AND VALIDATION
+# ============================================================================
+
+def discover_parquet_files(input_dir: str, target_tables: Optional[List[str]] = None) -> Dict[str, List[str]]:
+    """Discover parquet files for specified tables"""
     
-    df = df.copy()
+    if target_tables is None:
+        target_tables = list(CORE_TABLES.keys())
     
-    # Replace any infinite values with None
-    df = df.replace([np.inf, -np.inf], None)
+    input_path = Path(input_dir)
+    if not input_path.exists():
+        raise FileNotFoundError(f"Input directory does not exist: {input_dir}")
     
-    # Table-specific validations
-    if table == 'games':
-        # Core pitch validation
-        if 'pitch_number' in df.columns:
-            df['pitch_number'] = pd.to_numeric(df['pitch_number'], errors='coerce')
-            df['pitch_number'] = df['pitch_number'].clip(lower=1).astype('Int64')
-        
-        if 'at_bat_number' in df.columns:
-            df['at_bat_number'] = pd.to_numeric(df['at_bat_number'], errors='coerce')
-            df['at_bat_number'] = df['at_bat_number'].clip(lower=1).astype('Int64')
-        
-        # Statcast velocity validations
-        if 'release_speed' in df.columns:
-            df['release_speed'] = pd.to_numeric(df['release_speed'], errors='coerce')
-            df['release_speed'] = df['release_speed'].clip(lower=50, upper=110)
-        
-        if 'launch_speed' in df.columns:
-            df['launch_speed'] = pd.to_numeric(df['launch_speed'], errors='coerce')
-            df['launch_speed'] = df['launch_speed'].clip(lower=20, upper=130)
-        
-        # Expected metrics validation
-        for metric in ['estimated_ba_using_speedangle', 'estimated_woba_using_speedangle', 'babip_value']:
-            if metric in df.columns:
-                df[metric] = pd.to_numeric(df[metric], errors='coerce')
-                df[metric] = df[metric].clip(lower=0.000, upper=1.000)
-        
-        if 'estimated_slg_using_speedangle' in df.columns:
-            df['estimated_slg_using_speedangle'] = pd.to_numeric(df['estimated_slg_using_speedangle'], errors='coerce')
-            df['estimated_slg_using_speedangle'] = df['estimated_slg_using_speedangle'].clip(lower=0.000, upper=4.000)
-        
-        # Launch angle validation
-        if 'launch_angle' in df.columns:
-            df['launch_angle'] = pd.to_numeric(df['launch_angle'], errors='coerce')
-            df['launch_angle'] = df['launch_angle'].clip(lower=-90, upper=90)
-        
-        # Spin rate validation
-        if 'release_spin_rate' in df.columns:
-            df['release_spin_rate'] = pd.to_numeric(df['release_spin_rate'], errors='coerce')
-            df['release_spin_rate'] = df['release_spin_rate'].clip(lower=1000, upper=4000)
-        
-        # Zone validation (1-14 for strike zone system)
-        if 'zone' in df.columns:
-            df['zone'] = pd.to_numeric(df['zone'], errors='coerce')
-            df['zone'] = df['zone'].clip(lower=1, upper=14).astype('Int64')
+    discovered_files = {}
     
-    elif table == 'game_info':
-        # Score validation
-        for score_col in ['home_score', 'away_score']:
-            if score_col in df.columns:
-                df[score_col] = pd.to_numeric(df[score_col], errors='coerce')
-                df[score_col] = df[score_col].clip(lower=0).astype('Int64')
+    for table_name in target_tables:
+        if table_name not in CORE_TABLES:
+            print(f"⚠️ Unknown table: {table_name} (valid tables: {list(CORE_TABLES.keys())})")
+            continue
         
-        # Inning validation
-        if 'inning' in df.columns:
-            df['inning'] = pd.to_numeric(df['inning'], errors='coerce')
-            df['inning'] = df['inning'].clip(lower=1, upper=20).astype('Int64')
+        table_config = CORE_TABLES[table_name]
+        file_pattern = table_config['file_pattern']
+        
+        # Find matching files
+        matching_files = list(input_path.glob(file_pattern))
+        
+        if matching_files:
+            # Sort by filename for consistent processing order
+            file_paths = [str(f) for f in sorted(matching_files)]
+            discovered_files[table_name] = file_paths
+            print(f"   📁 Found {len(file_paths)} files for {table_name}: {[Path(f).name for f in file_paths]}")
+        else:
+            if table_config['required']:
+                print(f"   ⚠️ No files found for required table {table_name} (pattern: {file_pattern})")
+            else:
+                print(f"   💡 No files found for optional table {table_name} (pattern: {file_pattern})")
     
-    elif table == 'recent_stats':
-        # Batting average validation
-        if 'batting_avg' in df.columns:
-            df['batting_avg'] = pd.to_numeric(df['batting_avg'], errors='coerce')
-            df['batting_avg'] = df['batting_avg'].clip(lower=0.000, upper=1.000)
-        
-        # ERA validation
-        if 'era' in df.columns:
-            df['era'] = pd.to_numeric(df['era'], errors='coerce')
-            df['era'] = df['era'].clip(lower=0.00, upper=50.00)
-        
-        # OPS validation
-        if 'ops' in df.columns:
-            df['ops'] = pd.to_numeric(df['ops'], errors='coerce')
-            df['ops'] = df['ops'].clip(lower=0.000, upper=3.000)
-        
-        # Percentage stats validation
-        for pct_col in ['k_percent', 'bb_percent', 'hard_hit_percent', 'barrel_percent']:
-            if pct_col in df.columns:
-                df[pct_col] = pd.to_numeric(df[pct_col], errors='coerce')
-                df[pct_col] = df[pct_col].clip(lower=0.0, upper=100.0)
+    return discovered_files
+
+def get_loading_order_priority(data_type: str) -> int:
+    """Loading order for streamlined tables - lower numbers load first"""
+    loading_order = {
+        'game_info': 1,      # Load first - other tables reference this
+        'games': 2,          # Core Statcast data
+        'play_by_play': 3,   # Optional detailed sequences
+    }
+    return loading_order.get(data_type, 999)
+
+def sort_files_by_dependency_order(files: List[Path]) -> List[Path]:
+    """Sort files to load in dependency order"""
+    def get_file_priority(file_path: Path) -> tuple:
+        stem = file_path.stem
+        table_name = get_table_mapping(stem)
+        priority = get_loading_order_priority(table_name)
+        return (priority, stem)
     
-    return df
+    sorted_files = sorted(files, key=get_file_priority)
+    
+    print(f"📋 Streamlined loading order:")
+    for file in sorted_files:
+        stem = file.stem
+        table_name = get_table_mapping(stem)
+        priority = get_loading_order_priority(table_name)
+        description = CORE_TABLES.get(table_name, {}).get('description', 'Unknown')
+        print(f"   {priority}. {file.name} → {table_name} ({description})")
+    
+    return sorted_files
+
+# ============================================================================
+# DATA LOADING FUNCTIONS
+# ============================================================================
 
 @retry_database_operation(max_retries=2, delay=1)
 def load_table(conn, table: str, df: pd.DataFrame):
-    """ENHANCED: Load data with comprehensive column handling"""
+    """Load data with comprehensive column handling"""
     if df.empty:
         print(f"⏭️ Skipping {table} - DataFrame is empty")
         return
@@ -627,9 +468,6 @@ def load_table(conn, table: str, df: pd.DataFrame):
     # Apply comprehensive data type fixes
     df_to_load = fix_comprehensive_data_types(df_to_load)
     
-    # Enhanced validation
-    df_to_load = validate_enhanced_data(df_to_load, table)
-    
     # Final cleanup for PostgreSQL
     df_to_load = df_to_load.replace([float('inf'), float('-inf')], None)
     
@@ -661,22 +499,6 @@ def load_table(conn, table: str, df: pd.DataFrame):
                 ON CONFLICT (game_pk) DO UPDATE SET
                 {', '.join([f"{col} = EXCLUDED.{col}" for col in to_load if col != 'game_pk'])}
             """
-        elif table == "recent_stats":
-            pk_cols = ["stat_date", "player_id", "stat_type"]
-            non_pk_cols = [col for col in to_load if col not in pk_cols]
-            if non_pk_cols:
-                insert_sql = f"""
-                    INSERT INTO public.{table} ({cols_csv})
-                    SELECT {cols_csv} FROM {temp_table}
-                    ON CONFLICT (stat_date, player_id, stat_type) DO UPDATE SET
-                    {', '.join([f"{col} = EXCLUDED.{col}" for col in non_pk_cols])}
-                """
-            else:
-                insert_sql = f"""
-                    INSERT INTO public.{table} ({cols_csv})
-                    SELECT {cols_csv} FROM {temp_table}
-                    ON CONFLICT (stat_date, player_id, stat_type) DO NOTHING
-                """
         elif table == "games":
             pk_cols = ["game_pk", "at_bat_number", "pitch_number"]
             if all(col in to_load for col in pk_cols):
@@ -697,45 +519,6 @@ def load_table(conn, table: str, df: pd.DataFrame):
                     INSERT INTO public.{table} ({cols_csv})
                     SELECT {cols_csv} FROM {temp_table}
                     ON CONFLICT (game_pk, at_bat_index, event_index) DO NOTHING
-                """
-            else:
-                insert_sql = f"""
-                    INSERT INTO public.{table} ({cols_csv})
-                    SELECT {cols_csv} FROM {temp_table}
-                """
-        elif table == "lineups":
-            pk_cols = ["game_pk", "team_id", "batting_order"]
-            if all(col in to_load for col in pk_cols):
-                insert_sql = f"""
-                    INSERT INTO public.{table} ({cols_csv})
-                    SELECT {cols_csv} FROM {temp_table}
-                    ON CONFLICT (game_pk, team_id, batting_order) DO NOTHING
-                """
-            else:
-                insert_sql = f"""
-                    INSERT INTO public.{table} ({cols_csv})
-                    SELECT {cols_csv} FROM {temp_table}
-                """
-        elif table == "rosters":
-            pk_cols = ["game_date", "team_id", "person_id"]
-            if all(col in to_load for col in pk_cols):
-                insert_sql = f"""
-                    INSERT INTO public.{table} ({cols_csv})
-                    SELECT {cols_csv} FROM {temp_table}
-                    ON CONFLICT (game_date, team_id, person_id) DO NOTHING
-                """
-            else:
-                insert_sql = f"""
-                    INSERT INTO public.{table} ({cols_csv})
-                    SELECT {cols_csv} FROM {temp_table}
-                """
-        elif table == "umpires":
-            pk_cols = ["game_pk", "umpire_id"]
-            if all(col in to_load for col in pk_cols):
-                insert_sql = f"""
-                    INSERT INTO public.{table} ({cols_csv})
-                    SELECT {cols_csv} FROM {temp_table}
-                    ON CONFLICT (game_pk, umpire_id) DO NOTHING
                 """
             else:
                 insert_sql = f"""
@@ -812,8 +595,6 @@ def load_all_files_in_transaction(conn, files_and_tables: List[tuple]):
                 
             except Exception as e:
                 print(f"   ❌ Failed to load {file_path.name}: {e}")
-                import traceback
-                print(f"   📋 Error details: {traceback.format_exc()}")
                 continue
         
         # Commit transaction
@@ -836,11 +617,9 @@ def load_all_files_in_transaction(conn, files_and_tables: List[tuple]):
         raise
 
 def validate_schema(conn):
-    """Validate that the 7-table schema exists"""
-    expected_tables = [
-        "games", "play_by_play", "umpires", 
-        "lineups", "rosters", "game_info", "recent_stats"
-    ]
+    """Validate that essential tables exist"""
+    required_tables = ["games", "game_info"]
+    optional_tables = ["play_by_play"]
     
     cur = conn.cursor()
     cur.execute("""
@@ -851,18 +630,21 @@ def validate_schema(conn):
     """)
     
     existing_tables = {row[0] for row in cur.fetchall()}
-    missing_tables = set(expected_tables) - existing_tables
+    missing_required = set(required_tables) - existing_tables
     
-    if missing_tables:
-        print(f"⚠️  Missing schema tables: {sorted(missing_tables)}")
+    if missing_required:
+        print(f"❌ Missing required tables: {sorted(missing_required)}")
         print(f"   Run: python initialize_database.py")
         return False
     
-    print(f"✅ Schema validated: {len(expected_tables)} tables found")
+    missing_optional = set(optional_tables) - existing_tables
+    if missing_optional:
+        print(f"💡 Missing optional tables: {sorted(missing_optional)}")
+    
+    print(f"✅ Schema validated: Required tables found")
     
     # Check for data in key tables
-    data_check_tables = ["game_info", "games", "play_by_play"]
-    for table in data_check_tables:
+    for table in required_tables:
         if table in existing_tables:
             cur.execute(f"SELECT COUNT(*) FROM {table}")
             count = cur.fetchone()[0]
@@ -872,7 +654,7 @@ def validate_schema(conn):
 
 def show_loading_summary(files, successful_loads, failed_loads, total_rows_loaded):
     """Show comprehensive loading summary"""
-    print(f"\n🎉 LIVE DATA loading complete!")
+    print(f"\n🎉 STREAMLINED loading complete!")
     print(f"📊 Summary:")
     print(f"   📁 Files processed: {len(files)}")
     print(f"   ✅ Successful loads: {successful_loads}")
@@ -887,19 +669,18 @@ def show_loading_summary(files, successful_loads, failed_loads, total_rows_loade
     else:
         print(f"\n🎯 All files loaded successfully!")
     
-    print(f"\n✨ ENHANCED FEATURES:")
-    print(f"   🔧 Comprehensive column mapping for live pybaseball data")
-    print(f"   📊 Enhanced handling of ~40+ Statcast metrics")
-    print(f"   🛡️ Robust data type conversion and validation")
-    print(f"   🚀 Improved error handling and recovery")
+    print(f"\n🎯 STREAMLINED APPROACH:")
+    print(f"   ✅ Your system: Collects impossible-to-get Statcast data")
+    print(f"   🤖 Claude: Researches lineups, weather, umpires, trends") 
+    print(f"   💰 Result: Complete betting analysis with minimal complexity")
     
     print(f"\n💡 Next steps:")
     print(f"   1. Run analysis: python py/simple_analysis.py")
-    print(f"   2. Check data quality with validation queries")
-    print(f"   3. Ready for live betting analysis!")
+    print(f"   2. Send data to Claude for betting insights")
+    print(f"   3. Claude will research: {', '.join(CLAUDE_RESEARCH_TABLES)}")
 
 def main():
-    p = argparse.ArgumentParser(description="ENHANCED MLB live data loader with comprehensive Statcast support")
+    p = argparse.ArgumentParser(description="Streamlined MLB data loader - Claude optimized")
     p.add_argument(
         "--input-dir",
         default="stage",
@@ -908,17 +689,12 @@ def main():
     p.add_argument(
         "--tables",
         nargs="*",
-        help="Optional subset: games play_by_play game_info umpires lineups rosters recent_stats"
+        help="Optional subset: games game_info play_by_play"
     )
     p.add_argument(
         "--validate-schema",
         action="store_true",
         help="Validate schema before loading"
-    )
-    p.add_argument(
-        "--debug",
-        action="store_true",
-        help="Show detailed column mapping info"
     )
     p.add_argument(
         "--dry-run",
@@ -927,17 +703,9 @@ def main():
     )
     args = p.parse_args()
     
-    # Get configuration
-    try:
-        from py.config import get_config
-        config = get_config()
-        
-        mode = "PLACEHOLDER" if getattr(config, 'USE_PLACEHOLDER_DATA', True) else "LIVE"
-        print(f"🔧 Loading {mode} data with enhanced live data support")
-        
-    except Exception as e:
-        print(f"❌ Configuration error: {e}")
-        return
+    print(f"🚀 STREAMLINED MLB Data Loader - Claude Optimized")
+    print(f"🎯 Focus: Loading only essential data (Statcast + context)")
+    print(f"🤖 Claude will research: {', '.join(CLAUDE_RESEARCH_TABLES)}")
     
     # Connect to database
     try:
@@ -962,91 +730,87 @@ def main():
     if not files:
         print(f"❌ No parquet files found in {in_dir}")
         print("💡 Make sure backfill has been run first:")
-        print("   python py/enhanced_simple_backfill.py --start YYYY-MM-DD --end YYYY-MM-DD")
+        print("   python enhanced_simple_backfill.py --start YYYY-MM-DD --end YYYY-MM-DD --real-data")
         return
     
     print(f"📁 Found {len(files)} parquet files in {in_dir}")
     
-    # Show what files we found with enhanced mapping
+    # Show what files we found with streamlined mapping
     for file in files:
-        table_name = get_enhanced_table_mapping(file.stem)
-        print(f"   • {file.name} → {table_name}")
+        table_name = get_table_mapping(file.stem)
+        if table_name in CORE_TABLES:
+            print(f"   ✅ {file.name} → {table_name}")
+        else:
+            print(f"   ⏭️ {file.name} → {table_name} (SKIPPED - Claude will research)")
+    
+    # Filter to only core tables
+    def is_core_table(f):
+        stem = f.stem
+        table_name = get_table_mapping(stem)
+        return table_name in CORE_TABLES
+    
+    core_files = [f for f in files if is_core_table(f)]
+    skipped_files = [f for f in files if not is_core_table(f)]
+    
+    if skipped_files:
+        print(f"\n⏭️ Skipping {len(skipped_files)} files (Claude will research this data):")
+        for f in skipped_files:
+            print(f"   • {f.name}")
+    
+    if not core_files:
+        print(f"❌ No core table files found!")
+        print(f"💡 Expected files: {[pattern for pattern in [CORE_TABLES[t]['file_pattern'] for t in CORE_TABLES]]}")
+        return
     
     # Filter by tables if specified
     if args.tables:
         keep = set(args.tables)
         
-        def matches_schema(f):
+        def matches_requested(f):
             stem = f.stem
-            table_name = get_enhanced_table_mapping(stem)
+            table_name = get_table_mapping(stem)
             return table_name in keep
         
-        files = [f for f in files if matches_schema(f)]
+        core_files = [f for f in core_files if matches_requested(f)]
         
-        if not files:
-            print(f"❌ None of the files match requested tables: {keep}")
+        if not core_files:
+            print(f"❌ None of the core files match requested tables: {keep}")
             return
         
-        print(f"📋 Filtered to {len(files)} files for requested tables")
+        print(f"📋 Filtered to {len(core_files)} files for requested tables")
     
     # Sort files by dependency order
-    files = sort_files_by_dependency_order(files)
+    core_files = sort_files_by_dependency_order(core_files)
     
     # Prepare file-to-table mapping
     files_and_tables = []
-    for pq_file in files:
+    for pq_file in core_files:
         stem = pq_file.stem
-        table = get_enhanced_table_mapping(stem)
+        table = get_table_mapping(stem)
         files_and_tables.append((pq_file, table))
     
     # Show dry run if requested
     if args.dry_run:
         print(f"\n🔍 DRY RUN - Would load these files:")
         for pq_file, table in files_and_tables:
-            print(f"   {pq_file.name} → {table}")
+            description = CORE_TABLES.get(table, {}).get('description', 'Unknown')
+            print(f"   {pq_file.name} → {table} ({description})")
         print(f"\nTo actually load, run without --dry-run")
         return
     
     # Load all files in a single transaction
     try:
         successful_loads, total_rows_loaded = load_all_files_in_transaction(conn, files_and_tables)
-        failed_loads = len(files) - successful_loads
-        
-        # Check for constraint violations after loading
-        print(f"\n🔍 Checking for constraint violations...")
-        
-        with conn.cursor() as cur:
-            cur.execute("""
-                SELECT EXISTS (
-                    SELECT 1 FROM pg_proc 
-                    WHERE proname = 'check_foreign_key_violations'
-                )
-            """)
-            function_exists = cur.fetchone()[0]
-            
-            if function_exists:
-                cur.execute("SELECT * FROM check_foreign_key_violations()")
-                violations = cur.fetchall()
-                
-                total_violations = sum(row[2] for row in violations)
-                if total_violations > 0:
-                    print(f"⚠️ Found {total_violations} foreign key violations:")
-                    for table, constraint, count in violations:
-                        if count > 0:
-                            print(f"   {table}.{constraint}: {count} violations")
-                else:
-                    print(f"✅ No foreign key violations found")
-            else:
-                print(f"⚠️ Constraint validation function not available")
+        failed_loads = len(core_files) - successful_loads
         
     except Exception as e:
         print(f"❌ Loading failed: {e}")
         successful_loads = 0
-        failed_loads = len(files)
+        failed_loads = len(core_files)
         total_rows_loaded = 0
     
     # Show summary
-    show_loading_summary(files, successful_loads, failed_loads, total_rows_loaded)
+    show_loading_summary(core_files, successful_loads, failed_loads, total_rows_loaded)
     
     conn.close()
 
